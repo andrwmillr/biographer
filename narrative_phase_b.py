@@ -215,6 +215,8 @@ If multiple notes share a date, verify your citation by content — the date alo
 
 9. TRIAGE YOURSELF. You're getting everything, including fragments, lists, and throwaway scribbles. Most of the signal is in a minority of notes. Don't try to cover every note; pick the ones that actually carry weight and use the rest as context.
 
+**Length signals weight.** Sustained pieces — long journal entries, finished poems, multi-paragraph drafts, application essays, project documents — represent real engagement and almost always belong in the chapter. Fragments and one-liners punctuate; they don't anchor. If forced to choose, keep the long pieces and sample the short ones. Skipping a sustained piece to enumerate fragments is the wrong tradeoff.
+
 10. SPARSITY. When an era's archive is thin (few notes, little sustained writing), frame long entries as *exceptional* — "one of the few substantial entries from this stretch" — not representative of months of life. Acknowledge the thinness directly. Don't over-index on whichever long entries happen to exist.
 
 **Proportional coverage within an era:** When density is uneven within an era — e.g., a few months of sustained writing inside an otherwise sparse year — weight your coverage to the dense stretches. Follow the writing's gravity, not the calendar's spacing.
