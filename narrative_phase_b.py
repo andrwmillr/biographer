@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -96,7 +97,30 @@ OUT_MD = NARRATIVES_DIR / (
     f"_narrative_{RUN_STAMP}_tagged_{TASK_VARIANT}.md" if USE_TAGS
     else f"_narrative_{RUN_STAMP}_{TASK_VARIANT}.md"
 )
+SYSTEM_SNAPSHOT = NARRATIVES_DIR / f"_narrative_{RUN_STAMP}_system.md"
+USERS_SNAPSHOT = NARRATIVES_DIR / f"_narrative_{RUN_STAMP}_users.md"
 LATEST_SYMLINK = NARRATIVES_DIR / ("_narrative_tagged.md" if USE_TAGS else "_narrative.md")
+
+
+def _prompt_sha():
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(Path(__file__).parent), "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+def _is_dirty():
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(Path(__file__).parent), "status", "--porcelain"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        return bool(out)
+    except Exception:
+        return False
 MAX_RETRIES = 8
 
 RATING_TO_SIG = {5: "keeper", 4: "notable", 3: "notable", 2: "minor", 1: "skip"}
@@ -130,7 +154,7 @@ You'll receive the full text of every note in one era, chronologically. No pre-f
 TASK
 __TASK__
 
-Length: aim for 900-1500 words, OR 500-800 if the era's archive is thin (few notes, little sustained writing). Don't pad.
+Length: aim for 900-1500 words, OR 500-800 if the era's archive is thin (few notes, little sustained writing). This is a soft target — exceed it if the material genuinely demands more space (a dense era with multiple distinct strands), and undercut it if the era really is thin. Don't pad, but don't artificially trim either.
 
 STRUCTURE: write the chapter as continuous prose. The chapter title (`##`) is supplied externally; do not add another at that level. Subheaders at `###` are allowed ONLY when the era splits into distinct chronological or geographical chapters of life — e.g., a junior year that goes Hawaii → Amherst → Berkeley could use each location as a `###` heading. The subheader names a place or a clean time-block, nothing else. Do NOT use thematic subheaders ("Hawaii: reading", "What's there at the end") or topic subheaders ("the writing", "his relationships"). If the era is one continuous setting, no subheaders at all.
 
@@ -143,9 +167,11 @@ DO NOT WRITE LIKE A LITERARY CRITIC. Specifically avoid:
 - abstract pronouncements where a plain description would work
 - ornate sentence structures, nested clauses for their own sake, theatrical flourishes
 
-DON'T RANK ANDREW'S WRITING. Describe what a piece does, not where it sits on a quality scale. Avoid anointing phrases: "his best prose", "the strongest writing of the era", "probably the most important X in the archive", "genuinely finished", "the most accomplished poem", "one of the best things he's ever written". These are critic's grades and they pile up fast — a reader forms their own judgment from the quoted passages. One or two evaluative claims per chapter is a hard ceiling; prefer zero. If a piece stands out, show it by quoting it, not by rating it.
+DON'T RANK OR ANOINT. The distinction is between rating the writing's *stature* and describing what the writing *does*. **Block** stature claims: "his best prose", "the strongest writing of the era", "his most accomplished poem", "one of the best things he's ever written", "his earliest X", "his most ambitious Y", "the era's keystone", "his ars poetica", "probably the most important X in the archive", "genuinely finished". These are grades and they pile up fast — a reader forms their own judgment from the quoted passages. **Allow** descriptive observation of what's on the page when it's doing real work: "the register shifts here", "the prose tightens", "the sentences crack open", "this one breaks form". These point at moves a reader can verify in the quote. Test: is this a grade in disguise (could swap for a number), or is it pointing at a specific behavior? One or two stature-claims per chapter is a hard ceiling; prefer zero. If a piece stands out, show it by quoting it. Strong openers are fine — lead with the note that carries voice, even if it falls oddly in time, just don't frame it as a ranking.
 
 If you catch yourself writing a sentence that sounds like a New York Review of Books essay, rewrite it plainer. It's okay to sound less impressive if it means a reader can actually follow.
+
+CLOSINGS CAN SYNTHESIZE. The end of the chapter is the place to step back — pull a thread, name what's recurred, point at where the era leaves him. The closing doesn't need to defer to one specific note; it can speak to patterns across the chapter. Synthesis is not the same as anointing: describing what recurred ("the year keeps returning to X", "by the end he's still circling Y") is fine; ranking what mattered most ("the era's most important moment") is not.
 
 ABSOLUTE RULES (prior runs fabricated details — these rules are non-negotiable)
 
@@ -158,14 +184,16 @@ ABSOLUTE RULES (prior runs fabricated details — these rules are non-negotiable
 
 2. QUOTES. Two forms — use both. All quoted content must be verbatim, character-for-character, from the source.
    - Inline quotes: in double quotes, ≤30 words, each followed by [YYYY-MM-DD]. For short phrases woven into your prose.
-   - Block quotes: set off as a markdown blockquote (each line prefixed with "> "), 30-150 words, followed on the next line by [YYYY-MM-DD]. Include 2-4 block quotes per chapter — Andrew's own voice should break up your prose, especially for passages that show how he thinks or writes.
+   - Block quotes: set off as a markdown blockquote (each line prefixed with "> "), 30-200 words, followed on the next line by [YYYY-MM-DD]. Aim for 2-5 block quotes per chapter; more is fine if the material warrants it — Andrew's own voice should break up your prose, especially for passages that show how he thinks or writes. Ellipses (…) are permitted to elide passages within a block quote — e.g., to compress a long entry to its strongest beats. Ellipses openly mark the elision and don't fabricate; the non-elided text must still be verbatim.
    If you can't find an exact passage, paraphrase without quote marks.
 
-3. NO INVENTED DETAILS. Don't add colors, locations, times of day, weather, names, or sensory specifics absent from the source. Don't infer biographical facts the notes don't state either — when Andrew arrived somewhere, started a job, met someone, began or ended a relationship. If you're tempted to write "when he arrives at X in YYYY" or "after he started working at Y", stop: the notes rarely announce these transitions, and the year you'd guess from context is usually wrong. Stay vague ("that fall", "around this time", "by YYYY") rather than guessing. This applies especially to *relationships between people* — do not label someone as brother, sister, girlfriend, colleague, roommate, etc. unless (a) the notes explicitly say so, or (b) they appear in the PEOPLE block at the top of the input with that relationship stated. If a name is unlabeled, just use the name — "Max", not "his brother Max".
+3. NO INVENTED DETAILS. Don't add colors, locations, times of day, weather, names, or sensory specifics absent from the source. Don't infer biographical facts the notes don't state either — when Andrew arrived somewhere, started a job, met someone, began or ended a relationship. If you're tempted to write "when he arrives at X in YYYY" or "after he started working at Y", stop: the notes rarely announce these transitions, and the year you'd guess from context is usually wrong. Stay vague ("that fall", "around this time", "by YYYY") rather than guessing. This applies especially to *relationships between people*. The rule is about *rights/roles*, not headspace. **Block** labels that imply specific rights or roles the other person would have to ratify: girlfriend, boyfriend, brother, sister, roommate, colleague, best friend, partner, fiancé. These need explicit corroboration in the notes or the PEOPLE block. If a name is unlabeled, just use the name — "Max", not "his brother Max". **Allow** labels that describe Andrew's headspace or observable co-presence: crush, friend, classmate. These are fine when the notes plainly show the dynamic — sustained preoccupation, explicit affection, recurring co-presence over weeks or months. Test: would the other person have to agree to the label for it to be true? Crush, no — that's in Andrew's head. Girlfriend, yes — that requires her too.
 
 This applies to *contextual circumstance details* too: apartment type ("studio", "one-bedroom"), economic framing ("somewhere he can afford", "cheap sublet"), ingestion context ("high at work", "drunk at a bar"), workplace location ("from the office"), commute specifics, and so on. **When a note doesn't establish a detail, omit the detail** — don't replace it with a plausible-sounding placeholder. If you find yourself reaching for a generic descriptor to round out a sentence, cut it. A plainer sentence with fewer details is always better than a richer sentence with invented ones.
 
-If multiple notes share a date, verify your citation by content — the date alone doesn't disambiguate, so read the note you're about to cite and confirm it contains the detail you're describing.
+**Common knowledge is fine.** Background facts a reasonable reader knows — Amherst is a small college in western Massachusetts, Berkeley is in California, the academic year runs fall through spring — don't need to come from the corpus. Only era-specific or biographical claims about Andrew need grounding. Pattern-based inference *from the corpus itself* is also okay when stated as a pattern rather than a fact: "Jacob recurs across the year's entries" is fine; "his close friend Jacob" is not. The line is: don't invent details, but don't pretend you've never heard of Massachusetts.
+
+If multiple notes share a date, verify your citation by content — the date alone doesn't disambiguate, so read the note you're about to cite and confirm it contains the detail you're describing. When notes are tagged ⚠ DATE-CLUSTER (3+ notes sharing a date), the date likely reflects import time or last-viewed/edited time rather than the original write date. Still cite [YYYY-MM-DD] for linkability, but in prose refer to time vaguely ("that summer", "around this time") rather than asserting the exact date.
 
 **IDENTITY AND AMBITION CLAIMS.** Material in the archive doesn't prove identity or ambition. Don't write "he wants to be a fiction writer", "he becomes a poet", "he tries to be Y" unless a note explicitly says so. Poems in the archive don't make him "a poet trying to make it"; philosophy notes don't make him "studying philosophy." If you can quote him naming the aspiration, fine — otherwise omit the role frame.
 
@@ -188,6 +216,8 @@ If multiple notes share a date, verify your citation by content — the date alo
 9. TRIAGE YOURSELF. You're getting everything, including fragments, lists, and throwaway scribbles. Most of the signal is in a minority of notes. Don't try to cover every note; pick the ones that actually carry weight and use the rest as context.
 
 10. SPARSITY. When an era's archive is thin (few notes, little sustained writing), frame long entries as *exceptional* — "one of the few substantial entries from this stretch" — not representative of months of life. Acknowledge the thinness directly. Don't over-index on whichever long entries happen to exist.
+
+**Proportional coverage within an era:** When density is uneven within an era — e.g., a few months of sustained writing inside an otherwise sparse year — weight your coverage to the dense stretches. Follow the writing's gravity, not the calendar's spacing.
 
 11. CHRONOLOGY. Move through the era roughly in time order. You may group related moments across weeks or months when a theme demands it, but don't skip around in ways that cloud what actually happened. A reader should be able to track what came before what.
 
@@ -300,6 +330,26 @@ def apply_note_about(notes):
             n["about"] = about
             applied += 1
     return applied
+
+
+def flag_date_clusters(notes, threshold=3):
+    """Mark notes as date-uncertain when threshold+ notes share a date.
+    Such clusters likely reflect import time or last-viewed/edited time
+    rather than the original write date. The prompt uses the flag to
+    keep prose vague about exact timing while still emitting the citation."""
+    counts = {}
+    for n in notes:
+        d = (n.get("date") or "")[:10]
+        if d:
+            counts[d] = counts.get(d, 0) + 1
+    flagged = 0
+    for n in notes:
+        d = (n.get("date") or "")[:10]
+        if d and counts.get(d, 0) >= threshold:
+            n["date_uncertain"] = True
+            n["date_cluster_size"] = counts[d]
+            flagged += 1
+    return flagged
 
 
 def load_people():
@@ -429,7 +479,10 @@ def build_user_msg(era_name, notes, era_context=""):
         label = n["rel"].split("/", 1)[0]
         sig_part = f" · {n.get('significance', '')}" if USE_TAGS else ""
         mix = "  ⚠ MIXED — contains quoted material not written by Andrew" if n.get("is_mixed") else ""
-        lines.append(f"=== {date} · {label}{sig_part} · {title}{mix} ===")
+        date_warn = ""
+        if n.get("date_uncertain"):
+            date_warn = f"  ⚠ DATE-CLUSTER ({n.get('date_cluster_size')} notes share this date — likely import or last-edit time, not write time)"
+        lines.append(f"=== {date} · {label}{sig_part} · {title}{mix}{date_warn} ===")
         if n.get("about"):
             lines.append(f"  ⚠ ABOUT: {n['about']} — don't place this note's scenes in the write-date's era.")
         lines.append("")
@@ -671,6 +724,9 @@ async def main():
     n_about = apply_note_about(all_notes)
     if n_about:
         log(f"note-about overrides: {n_about}")
+    n_uncertain = flag_date_clusters(all_notes)
+    if n_uncertain:
+        log(f"date clusters: flagged {n_uncertain} notes (≥3 sharing a date)")
     era_context_map = load_era_context()
     if era_context_map:
         n_filled = sum(1 for v in era_context_map.values() if v)
@@ -697,6 +753,23 @@ async def main():
     log("")
     eras_with_notes = [name for name, _, _ in ERAS if by_era[name]]
     log(f"writing {len(eras_with_notes)} chapters sequentially, each seeing prior chapters…")
+
+    sha = _prompt_sha()
+    dirty = "-dirty" if _is_dirty() else ""
+    snapshot_header = (
+        f"<!-- prompt_sha: {sha}{dirty}  run: {RUN_STAMP}  "
+        f"model: {MODEL}  task: {TASK_VARIANT}  tags: {USE_TAGS} -->\n\n"
+    )
+    NARRATIVES_DIR.mkdir(parents=True, exist_ok=True)
+    SYSTEM_SNAPSHOT.write_text(snapshot_header + CHAPTER_SYSTEM, encoding="utf-8")
+    users_parts = [snapshot_header]
+    for name in eras_with_notes:
+        msg = build_user_msg(name, by_era[name], era_context=era_context_map.get(name, ""))
+        users_parts.append(f"=== {name} ===\n\n{msg}\n\n")
+    USERS_SNAPSHOT.write_text("".join(users_parts), encoding="utf-8")
+    log(f"prompt snapshot: {SYSTEM_SNAPSHOT.name} ({len(CHAPTER_SYSTEM):,} chars system)")
+    log(f"prompt snapshot: {USERS_SNAPSHOT.name} ({sum(len(p) for p in users_parts):,} chars users)")
+
     t_chapters = time.time()
 
     chapters = []
@@ -738,6 +811,7 @@ async def main():
     body = "\n".join(lines)
     body, n_resolved, n_unresolved = resolve_citations(body, all_notes)
     log(f"citations: {n_resolved} linked, {n_unresolved} unresolved")
+    body = snapshot_header + body
     OUT_MD.write_text(body, encoding="utf-8")
     if LATEST_SYMLINK.is_symlink() or LATEST_SYMLINK.exists():
         LATEST_SYMLINK.unlink()
