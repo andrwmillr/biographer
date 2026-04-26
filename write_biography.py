@@ -133,7 +133,7 @@ TOTAL_CHAR_CAP = 700_000
 MIN_PER_NOTE = 400
 
 
-CHAPTER_SYSTEM = (Path(__file__).parent / "SYSTEM.md").read_text(encoding="utf-8")
+CHAPTER_SYSTEM = (Path(__file__).parent / "DRAFTER.md").read_text(encoding="utf-8")
 CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__TASK__", TASK_VARIANTS[TASK_VARIANT])
 
 
