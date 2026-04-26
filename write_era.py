@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from write_biography import (
     CHAPTER_SYSTEM, CORPUS, ERAS, apply_authorship, apply_date_overrides,
     apply_note_about, build_user_msg, era_of, era_slug, flag_date_clusters,
-    load_authorship, load_corpus_notes, load_era_brief,
+    load_authorship, load_corpus_notes, load_era_brief, load_prior_chapters,
 )
 
 ERA_NAMES = [name for name, _, _ in ERAS]
@@ -43,7 +43,8 @@ if not era_notes:
     sys.exit(1)
 
 era_brief = era_brief_map.get(era_name, "")
-user_msg = build_user_msg(era_name, era_notes, era_brief=era_brief)
+prior_chapters = load_prior_chapters(era_name)
+user_msg = build_user_msg(era_name, era_notes, era_brief=era_brief, prior_chapters=prior_chapters)
 
 slug = era_slug(era_name)
 dump_dir = CORPUS / "claude" / "biographies" / "_dump" / slug
@@ -84,3 +85,5 @@ print(f"refreshed {era_name} ({len(era_notes)} notes, {era_uncertain} date-uncer
 print(f"  prompt_sha: {sha}{dirty}")
 print(f"  system.md:  {len(CHAPTER_SYSTEM):,} chars")
 print(f"  user.md:    {len(user_msg):,} chars")
+if prior_chapters:
+    print(f"  prior chapters: {len(prior_chapters)} ({', '.join(name for name, _ in prior_chapters)})")

@@ -50,6 +50,7 @@ PEOPLE = CORPUS / "_config" / "_people.json"
 ERAS_FILE = CORPUS / "_config" / "eras.yaml"
 ERAS_BODY_DIR = CORPUS / "_config" / "eras"
 BIOGRAPHIES_DIR = CORPUS / "claude" / "biographies"
+CHAPTERS_DIR = BIOGRAPHIES_DIR / "chapters"
 RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 MODELS = {
     "opus-4.6": "claude-opus-4-6",
@@ -327,6 +328,23 @@ def load_era_brief():
     return out
 
 
+def load_prior_chapters(era_name):
+    """Return [(era_name, chapter_text), ...] for all eras chronologically
+    before `era_name` that have a canonical chapter at chapters/<slug>.md.
+    Order: chronological (oldest first). Missing chapters are skipped
+    silently — partial state is normal early in the project."""
+    out = []
+    for name, _, _ in ERAS:
+        if name == era_name:
+            return out
+        ch_path = CHAPTERS_DIR / f"{era_slug(name)}.md"
+        if ch_path.exists():
+            ch_text = ch_path.read_text(encoding="utf-8").strip()
+            if ch_text:
+                out.append((name, ch_text))
+    return out
+
+
 def format_people_block(people):
     if not people:
         return ""
@@ -401,7 +419,7 @@ def era_heading(era_name, notes):
     return f"{era_name} ({lo} – {hi})" if lo else era_name
 
 
-def build_user_msg(era_name, notes, era_brief=""):
+def build_user_msg(era_name, notes, era_brief="", prior_chapters=None):
     sorted_notes = sorted(notes, key=lambda n: n.get("date", ""))
     bodies = []
     for n in sorted_notes:
@@ -414,6 +432,17 @@ def build_user_msg(era_name, notes, era_brief=""):
         ratio = TOTAL_CHAR_CAP / total
         bodies = [(n, sample_keeper(b, max(MIN_PER_NOTE, int(len(b) * ratio)))) for n, b in bodies]
     lines = []
+    prior_chapters = prior_chapters or []
+    if prior_chapters:
+        lines.append("--- PRIOR CHAPTERS (earlier eras in this retrospective — for continuity only; do not rewrite or repeat) ---")
+        lines.append("")
+        for prior_era, ch_text in prior_chapters:
+            lines.append(f"### {prior_era}")
+            lines.append("")
+            lines.append(ch_text)
+            lines.append("")
+        lines.append("--- END PRIOR CHAPTERS ---")
+        lines.append("")
     if era_brief:
         lines.extend([
             "--- ERA BRIEF (authoring brief for this era — factual anchors, threads worth tracking, drafting guidance accumulated from prior runs) ---",
