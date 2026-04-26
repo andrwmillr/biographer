@@ -311,11 +311,12 @@ def load_people():
     return json.loads(PEOPLE.read_text())
 
 
-def load_era_context():
-    """Return {era_name: body} — full per-era body content read from
-    _config/eras/<slug>.md. The first paragraph is the where/when anchor;
-    everything after is longer-form era notes (cross-era carryover,
-    drafting calibrations, etc.). Missing files are skipped silently."""
+def load_era_brief():
+    """Return {era_name: body} — per-era authoring brief read from
+    _config/eras/<slug>.md. Tells the drafter how to write this era:
+    factual where/when anchor, threads worth tracking, structural
+    decisions, drafting guidance accumulated from prior runs.
+    Missing files are skipped silently."""
     out = {}
     for name, _, _ in ERAS:
         body_path = ERAS_BODY_DIR / f"{era_slug(name)}.md"
@@ -400,7 +401,7 @@ def era_heading(era_name, notes):
     return f"{era_name} ({lo} – {hi})" if lo else era_name
 
 
-def build_user_msg(era_name, notes, era_context=""):
+def build_user_msg(era_name, notes, era_brief=""):
     sorted_notes = sorted(notes, key=lambda n: n.get("date", ""))
     bodies = []
     for n in sorted_notes:
@@ -413,11 +414,11 @@ def build_user_msg(era_name, notes, era_context=""):
         ratio = TOTAL_CHAR_CAP / total
         bodies = [(n, sample_keeper(b, max(MIN_PER_NOTE, int(len(b) * ratio)))) for n, b in bodies]
     lines = []
-    if era_context:
+    if era_brief:
         lines.extend([
-            "--- ERA CONTEXT (where Andrew is during this era — use as factual anchor; don't override with inference from the notes) ---",
-            era_context,
-            "--- END ERA CONTEXT ---",
+            "--- ERA BRIEF (authoring brief for this era — factual anchors, threads worth tracking, drafting guidance accumulated from prior runs) ---",
+            era_brief,
+            "--- END ERA BRIEF ---",
             "",
         ])
     lo, hi = era_date_range(notes)
@@ -583,8 +584,8 @@ def resolve_citations(body, all_notes):
     return "".join(out), resolved, unresolved
 
 
-async def write_chapter(client, era_name, notes, prior_chapters_list=None, people=None, era_context=""):
-    era_msg = build_user_msg(era_name, notes, era_context=era_context)
+async def write_chapter(client, era_name, notes, prior_chapters_list=None, people=None, era_brief=""):
+    era_msg = build_user_msg(era_name, notes, era_brief=era_brief)
     label = f"{era_name}  ({len(notes)} notes"
 
     # Split prior chapters across separate content blocks with the cache marker
@@ -676,10 +677,10 @@ async def main():
     n_uncertain = flag_date_clusters(all_notes)
     if n_uncertain:
         log(f"date clusters: flagged {n_uncertain} notes (≥3 sharing a date)")
-    era_context_map = load_era_context()
-    if era_context_map:
-        n_filled = sum(1 for v in era_context_map.values() if v)
-        log(f"era context: {n_filled}/{len(era_context_map)} eras filled")
+    era_brief_map = load_era_brief()
+    if era_brief_map:
+        n_filled = sum(1 for v in era_brief_map.values() if v)
+        log(f"era brief: {n_filled}/{len(era_brief_map)} eras filled")
     by_era = {name: [] for name, _, _ in ERAS}
     skipped_date = 0
     for n in all_notes:
@@ -709,7 +710,7 @@ async def main():
     SYSTEM_SNAPSHOT.write_text(snapshot_header + CHAPTER_SYSTEM, encoding="utf-8")
     users_parts = [snapshot_header]
     for name in eras_with_notes:
-        msg = build_user_msg(name, by_era[name], era_context=era_context_map.get(name, ""))
+        msg = build_user_msg(name, by_era[name], era_brief=era_brief_map.get(name, ""))
         users_parts.append(f"=== {name} ===\n\n{msg}\n\n")
     USERS_SNAPSHOT.write_text("".join(users_parts), encoding="utf-8")
     log(f"prompt snapshot: {SYSTEM_SNAPSHOT.name} ({len(CHAPTER_SYSTEM):,} chars system)")
@@ -729,7 +730,7 @@ async def main():
             client, name, by_era[name],
             prior_chapters_list=prior_list,
             people=None,
-            era_context=era_context_map.get(name, ""),
+            era_brief=era_brief_map.get(name, ""),
         )
         _, text, _ = result
         quotes, unverified = verify_quotes(text, by_era[name])

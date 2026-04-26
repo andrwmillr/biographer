@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from write_biography import (
     CHAPTER_SYSTEM, CORPUS, ERAS, apply_authorship, apply_date_overrides,
     apply_note_about, build_user_msg, era_of, era_slug, flag_date_clusters,
-    load_authorship, load_corpus_notes, load_era_context,
+    load_authorship, load_corpus_notes, load_era_brief,
 )
 
 ERA_NAMES = [name for name, _, _ in ERAS]
@@ -35,15 +35,15 @@ verdicts = load_authorship()
 all_notes, _, _ = apply_authorship(all_notes, verdicts)
 apply_note_about(all_notes)
 flag_date_clusters(all_notes)
-era_context_map = load_era_context()
+era_brief_map = load_era_brief()
 
 era_notes = [n for n in all_notes if era_of(n.get("date", "")) == era_name]
 if not era_notes:
     print(f"No notes for era {era_name!r}", file=sys.stderr)
     sys.exit(1)
 
-era_context = era_context_map.get(era_name, "")
-user_msg = build_user_msg(era_name, era_notes, era_context=era_context)
+era_brief = era_brief_map.get(era_name, "")
+user_msg = build_user_msg(era_name, era_notes, era_brief=era_brief)
 
 slug = era_slug(era_name)
 dump_dir = CORPUS / "claude" / "biographies" / "_dump" / slug
