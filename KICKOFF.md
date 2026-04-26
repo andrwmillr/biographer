@@ -19,4 +19,6 @@ Stop and ask me at these checkpoints, in order:
 
 After final assembly, expect post-write iteration — register/quote swaps, factual catches, paragraph rewrites. This is by design (see DRAFTER FRAME on the two-pass system).
 
+5. **Brief update** — after post-write iteration settles. Propose updates to the era brief at __BRIEF_PATH__ based on what this run learned: threads worth tracking, structural decisions specific to this era, drafting guidance, register choices, people-labeling, hazards to flag for next time. Skip run-specific outputs (exact block quotes used, exact word count) — the brief is era-level, not run-level. The brief grows run-over-run so the next drafter of this era starts with this run's lessons in hand.
+
 Also stop mid-draft for any genuine ambiguity. Do not guess and move on.
