@@ -237,10 +237,14 @@ def apply_date_overrides(notes):
 
 
 def apply_note_about(notes):
-    """Stamp n["about"] = description for notes that were written on one date
-    but are *about* a different period (retrospectives, memoir-mode entries).
-    The narrative prompt uses this to avoid placing the note's scenes in the
-    write-date's era."""
+    """Stamp n["about"] = freeform contextual guidance for individual notes.
+    Two kinds of use today:
+    - Retrospective: note written in year Y describes events from year X
+      (the entry should say what era to place the scenes in).
+    - Pseudonym/disambiguation: a name in the note is altered, or a referent
+      is non-obvious (the entry should clarify identity without changing era).
+    Each json entry should carry whatever guidance it needs; the user.md
+    renderer prepends a "⚠ ABOUT:" tag and emits the entry verbatim."""
     if not NOTE_ABOUT.exists():
         return 0
     overrides = json.loads(NOTE_ABOUT.read_text())
@@ -404,7 +408,7 @@ def build_user_msg(era_name, notes, era_context=""):
             date_warn = f"  ⚠ DATE-CLUSTER ({n.get('date_cluster_size')} notes share this date — likely import or last-edit time, not write time)"
         lines.append(f"=== {date} · {label} · {title}{mix}{date_warn} ===")
         if n.get("about"):
-            lines.append(f"  ⚠ ABOUT: {n['about']} — don't place this note's scenes in the write-date's era.")
+            lines.append(f"  ⚠ ABOUT: {n['about']}")
         lines.append("")
         lines.append(body)
         lines.append("")
