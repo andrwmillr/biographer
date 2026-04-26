@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from write_biography import (
     CHAPTER_SYSTEM, CORPUS, ERAS, apply_authorship, apply_date_overrides,
-    apply_note_about, build_user_msg, era_of, flag_date_clusters,
+    apply_note_about, build_user_msg, era_of, era_slug, flag_date_clusters,
     load_authorship, load_corpus_notes, load_era_context,
 )
 
@@ -45,7 +45,7 @@ if not era_notes:
 era_context = era_context_map.get(era_name, "")
 user_msg = build_user_msg(era_name, era_notes, era_context=era_context)
 
-slug = era_name.replace(" ", "_").replace("/", "-")
+slug = era_slug(era_name)
 dump_dir = CORPUS / "claude" / "biographies" / "_dump" / slug
 dump_dir.mkdir(parents=True, exist_ok=True)
 

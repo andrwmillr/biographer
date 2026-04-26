@@ -23,6 +23,8 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+
+import yaml
 from pathlib import Path
 
 from anthropic import AsyncAnthropic
@@ -45,7 +47,8 @@ CORPUS_CACHE = CORPUS / "_derived" / "_corpus_cache.pkl"
 DATE_OVERRIDES = CORPUS / "_config" / "_date_overrides.json"
 NOTE_ABOUT = CORPUS / "_config" / "_note_about.json"
 PEOPLE = CORPUS / "_config" / "_people.json"
-ERA_CONTEXT_FILE = CORPUS / "_config" / "_era_context.json"
+ERAS_FILE = CORPUS / "_config" / "eras.yaml"
+ERAS_BODY_DIR = CORPUS / "_config" / "eras"
 BIOGRAPHIES_DIR = CORPUS / "claude" / "biographies"
 RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 MODELS = {
@@ -118,16 +121,38 @@ MAX_RETRIES = 8
 
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
 
-ERAS = [
-    ("Amherst I",          "0000-00", "2013-05"),
-    ("Junior year",        "2013-06", "2014-08"),
-    ("Senior year",        "2014-09", "2015-05"),
-    ("Chicago",            "2015-06", "2017-05"),
-    ("LA/Amherst/Boston",  "2017-06", "2018-12"),
-    ("Boston",             "2019-01", "2020-08"),
-    ("New York I",         "2020-09", "2024-10"),
-    ("New York II",        "2024-11", "9999-99"),
-]
+def era_slug(name):
+    return name.replace(" ", "_").replace("/", "-")
+
+
+def _prev_month(ym):
+    """'2013-06' -> '2013-05'; '2014-01' -> '2013-12'."""
+    y, m = int(ym[:4]), int(ym[5:7])
+    m -= 1
+    if m == 0:
+        m, y = 12, y - 1
+    return f"{y:04d}-{m:02d}"
+
+
+def _load_eras():
+    """Load era boundaries from eras.yaml. Each entry is {name, start};
+    end dates are derived as the month before the next entry's start.
+    The last era is open-ended (9999-99)."""
+    if not ERAS_FILE.exists():
+        return []
+    raw = yaml.safe_load(ERAS_FILE.read_text(encoding="utf-8")) or []
+    raw_sorted = sorted(raw, key=lambda e: e["start"])
+    out = []
+    for i, e in enumerate(raw_sorted):
+        if i + 1 < len(raw_sorted):
+            end = _prev_month(raw_sorted[i + 1]["start"])
+        else:
+            end = "9999-99"
+        out.append((e["name"], e["start"], end))
+    return out
+
+
+ERAS = _load_eras()
 
 TOTAL_CHAR_CAP = 700_000
 MIN_PER_NOTE = 400
@@ -287,12 +312,18 @@ def load_people():
 
 
 def load_era_context():
-    """Return {era_name: anchor_string} — short biographical anchors per era
-    so the model doesn't infer Andrew's life situation from era names alone.
-    See ERAS for the canonical list of era names."""
-    if not ERA_CONTEXT_FILE.exists():
-        return {}
-    return json.loads(ERA_CONTEXT_FILE.read_text())
+    """Return {era_name: body} — full per-era body content read from
+    _config/eras/<slug>.md. The first paragraph is the where/when anchor;
+    everything after is longer-form era notes (cross-era carryover,
+    drafting calibrations, etc.). Missing files are skipped silently."""
+    out = {}
+    for name, _, _ in ERAS:
+        body_path = ERAS_BODY_DIR / f"{era_slug(name)}.md"
+        if body_path.exists():
+            body = body_path.read_text(encoding="utf-8").strip()
+            if body:
+                out[name] = body
+    return out
 
 
 def format_people_block(people):
