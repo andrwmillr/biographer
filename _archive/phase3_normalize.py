@@ -24,6 +24,7 @@ from pathlib import Path
 
 ARCHIVE = Path.home() / "notes-archive"
 CORPUS  = ARCHIVE / "_corpus"
+NOTES_DIR = CORPUS / "notes"
 
 # ---------- YAML helpers ----------
 
@@ -143,7 +144,7 @@ def enml_to_text(enml: str) -> str:
 def process_flat_source(src_name: str):
     """zenedit, letters-backup: flat dirs of .txt + .docx (no sidecars)."""
     src_dir = ARCHIVE / src_name
-    out_dir = CORPUS / src_name
+    out_dir = NOTES_DIR / src_name
     stats = {'txt': 0, 'docx': 0, 'skipped': 0, 'fail': 0}
     for path in sorted(src_dir.rglob('*')):
         if not path.is_file(): continue
@@ -178,7 +179,7 @@ def process_flat_source(src_name: str):
 
 def process_debrief():
     src_dir = ARCHIVE / 'debrief'
-    out_dir = CORPUS / 'debrief'
+    out_dir = NOTES_DIR / 'debrief'
     stats = {'rtf': 0, 'fail': 0}
     for rtf_path in sorted(src_dir.rglob('*.rtf')):
         if '/_raw/' in str(rtf_path): continue
@@ -208,7 +209,7 @@ def process_debrief():
 
 def process_evernote():
     src_dir = ARCHIVE / 'evernote'
-    out_dir = CORPUS / 'evernote'
+    out_dir = NOTES_DIR / 'evernote'
     stats = {'enml': 0}
     for enml_path in sorted(src_dir.rglob('*.enml')):
         if '/_raw/' in str(enml_path): continue
@@ -239,7 +240,7 @@ def process_evernote():
 
 def process_apple_notes():
     src_dir = ARCHIVE / 'apple-notes'
-    out_dir = CORPUS / 'apple-notes'
+    out_dir = NOTES_DIR / 'apple-notes'
     stats = {'txt': 0}
     for txt_path in sorted(src_dir.rglob('*.txt')):
         if '/_raw/' in str(txt_path): continue

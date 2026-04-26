@@ -14,8 +14,9 @@ import sys
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-SIGNAL_TSV = CORPUS / "_signal.tsv"
-POEMS_TSV = CORPUS / "_poems.tsv"
+NOTES_DIR = CORPUS / "notes"
+SIGNAL_TSV = CORPUS / "_derived" / "_signal.tsv"
+POEMS_TSV = CORPUS / "_derived" / "_poems.tsv"
 
 OLD_SOURCE_DIRS = ["apple-notes", "debrief", "evernote", "letters-backup", "zenedit"]
 POETRY_DIR = CORPUS / "_poetry"
@@ -124,13 +125,13 @@ for lab, n in sorted(by_label.items(), key=lambda x: -x[1]):
 
 # --- Step 3: Create folders ----------------------------------------------
 for label in by_label:
-    (CORPUS / label).mkdir(exist_ok=True)
+    (NOTES_DIR / label).mkdir(exist_ok=True)
 
 # --- Step 4: Execute moves + update label frontmatter ---------------------
 move_map = {}  # old_rel -> new_rel
 for old_rel, new_rel, label, is_poem in moves:
-    src = CORPUS / old_rel
-    dst = CORPUS / new_rel
+    src = NOTES_DIR / old_rel
+    dst = NOTES_DIR / new_rel
     text = src.read_text(encoding="utf-8", errors="replace")
 
     # Update label in frontmatter if it became 'poetry'
@@ -177,7 +178,7 @@ print("Updated _poems.tsv")
 
 # --- Step 6: Remove old source dirs ---------------------------------------
 for sd in OLD_SOURCE_DIRS:
-    p = CORPUS / sd
+    p = NOTES_DIR / sd
     if p.exists():
         shutil.rmtree(p)
         print(f"Removed: {sd}/")

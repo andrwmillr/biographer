@@ -10,7 +10,8 @@ import shutil
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-POEMS_TSV = CORPUS / "_poems.tsv"
+NOTES_DIR = CORPUS / "notes"
+POEMS_TSV = CORPUS / "_derived" / "_poems.tsv"
 OUT_DIR = CORPUS / "_poetry"
 
 OUT_DIR.mkdir(exist_ok=True)
@@ -47,7 +48,7 @@ copied = 0
 missing = 0
 used_names = set()
 for r in poems:
-    src = CORPUS / r["rel"]
+    src = NOTES_DIR / r["rel"]
     if not src.exists():
         print(f"MISSING: {r['rel']}")
         missing += 1

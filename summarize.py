@@ -6,8 +6,8 @@ prints output. Fast loop for tuning the summary prompt or harvesting
 variants — ~30 seconds per call, no chapter regeneration.
 
 Usage:
-    python3 _raw/summarize.py                                          # default: 17:18 run
-    python3 _raw/summarize.py _narrative_naive_20260424_171813.md      # explicit
+    python3 _scripts/summarize.py                                          # default: 17:18 run
+    python3 _scripts/summarize.py _history/biography_20260424_171813.md   # explicit
 """
 import asyncio
 import os
@@ -19,10 +19,10 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 CORPUS = Path(__file__).resolve().parent.parent / "_corpus"
-NARRATIVES_DIR = CORPUS / "artifacts" / "narratives"
-SUMMARIES_DIR = CORPUS / "artifacts" / "summaries"
+BIOGRAPHIES_DIR = CORPUS / "claude" / "biographies"
+SUMMARIES_DIR = CORPUS / "claude" / "summaries"
 MODEL = "claude-opus-4-7"
-DEFAULT_INPUT = "_narrative_naive_20260424_171813.md"
+DEFAULT_INPUT = "_history/biography_20260424_171813.md"
 
 SUMMARY_SYSTEM = """You are writing the opening synthesis to a retrospective on Andrew's personal writing archive, 2011-2026. Plain third-person voice — a thoughtful biographer, not a literary critic.
 
@@ -56,7 +56,7 @@ async def main():
         sys.exit(1)
 
     target_name = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_INPUT
-    target = NARRATIVES_DIR / target_name
+    target = BIOGRAPHIES_DIR / target_name
     if not target.exists():
         print(f"ERROR: {target} not found", file=sys.stderr)
         sys.exit(1)

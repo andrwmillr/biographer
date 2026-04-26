@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-OUT_TSV = CORPUS / "_duplicates.tsv"
+OUT_TSV = CORPUS / "_derived" / "_duplicates.tsv"
 
 
 def extract_body(text: str) -> str:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Standalone verifier for an existing _narrative.md.
+"""Standalone verifier for an existing biography.md.
 
 Splits the narrative into era chapters, extracts all quoted passages, and
 checks each quote verbatim against the bodies of notes from that era.
 No API calls — reuses the extract_quotes / verify_quotes logic from
-narrative_phase_b.
+write_biography.
 """
 import json
 import re
@@ -12,21 +12,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import (  # type: ignore
-    CORPUS,
+from write_biography import (  # type: ignore
     ERAS,
-    NARRATIVES_DIR,
-    PHASE_A,
-    RATING_TO_SIG,
-    TRIAGE_STATE,
-    apply_triage_overrides,
+    BIOGRAPHIES_DIR,
     era_of,
     extract_quotes,
-    load_phase_a,
+    load_corpus_notes,
     parse_note_body,
 )
 
-NARRATIVE = NARRATIVES_DIR / "_narrative.md"
+BIOGRAPHY = BIOGRAPHIES_DIR / "biography.md"
 
 
 def normalize(s: str) -> str:
@@ -84,22 +79,21 @@ def split_chapters(md: str):
 
 
 def main():
-    if not NARRATIVE.exists():
-        print(f"ERROR: {NARRATIVE} not found")
+    if not BIOGRAPHY.exists():
+        print(f"ERROR: {BIOGRAPHY} not found")
         sys.exit(1)
 
-    all_notes = load_phase_a()
-    apply_triage_overrides(all_notes)
+    all_notes = load_corpus_notes()
     by_era = {name: [] for name, _, _ in ERAS}
     for n in all_notes:
         e = era_of(n.get("date", ""))
         if e is not None:
             by_era[e].append(n)
 
-    md = NARRATIVE.read_text(encoding="utf-8")
+    md = BIOGRAPHY.read_text(encoding="utf-8")
     chapters = split_chapters(md)
 
-    print(f"narrative: {NARRATIVE}")
+    print(f"biography: {BIOGRAPHY}")
     print(f"chapters found: {list(chapters.keys())}")
     print()
 

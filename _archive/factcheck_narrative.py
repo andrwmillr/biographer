@@ -11,8 +11,8 @@ still get checked, which is where the worst confabulations tend to live.
 Output: `<narrative>.factcheck.json` with only the flagged paragraphs.
 
 Usage:
-    python3 _raw/factcheck_narrative.py                    # _narrative_naive.md
-    python3 _raw/factcheck_narrative.py _narrative.md
+    python3 _scripts/factcheck_narrative.py                    # biography.md
+    python3 _scripts/factcheck_narrative.py biography_20260424_171813.md
 """
 import asyncio
 import json
@@ -21,16 +21,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import (  # type: ignore
-    CORPUS,
-    NARRATIVES_DIR,
+from write_biography import (  # type: ignore
+    BIOGRAPHIES_DIR,
     apply_authorship,
     apply_date_overrides,
     apply_note_about,
     format_people_block,
     load_authorship,
+    load_corpus_notes,
     load_people,
-    load_phase_a,
     log,
     parse_note_body,
 )
@@ -193,14 +192,14 @@ async def factcheck_paragraph(client, paragraph, chapter_notes_block, people_blo
 
 
 async def main():
-    target_name = sys.argv[1] if len(sys.argv) > 1 else "_narrative_naive.md"
-    target = NARRATIVES_DIR / target_name
+    target_name = sys.argv[1] if len(sys.argv) > 1 else "biography.md"
+    target = BIOGRAPHIES_DIR / target_name
     if not target.exists():
         print(f"ERROR: {target} not found")
         sys.exit(1)
 
     log("loading notes...")
-    notes = load_phase_a()
+    notes = load_corpus_notes()
     apply_date_overrides(notes)
     apply_note_about(notes)
     verdicts = load_authorship()
@@ -271,7 +270,7 @@ async def main():
             })
 
     out_name = target.stem + ".factcheck.json"
-    out_path = NARRATIVES_DIR / out_name
+    out_path = BIOGRAPHIES_DIR / out_name
     out_path.write_text(json.dumps(flagged, indent=2, ensure_ascii=False), encoding="utf-8")
     log(f"wrote {out_path.name}: {len(flagged)} paragraphs with flagged claims (of {total} checked)")
 

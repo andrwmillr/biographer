@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-SIGNAL_TSV = CORPUS / "_signal.tsv"
+SIGNAL_TSV = CORPUS / "_derived" / "_signal.tsv"
 
 FM_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 LABEL_LINE = re.compile(r"^(label|alt_label)\s*:.*$", re.MULTILINE)

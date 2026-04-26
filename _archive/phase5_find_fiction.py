@@ -14,8 +14,9 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-SIGNAL_TSV = CORPUS / "_signal.tsv"
-OUT_TSV = CORPUS / "_fiction.tsv"
+NOTES_DIR = CORPUS / "notes"
+SIGNAL_TSV = CORPUS / "_derived" / "_signal.tsv"
+OUT_TSV = CORPUS / "_derived" / "_fiction.tsv"
 MODEL = "claude-haiku-4-5-20251001"
 CONCURRENCY = 3
 MAX_RETRIES = 8
@@ -57,7 +58,7 @@ def parse_note(path: Path):
 
 
 async def classify_one(client, sem, rel: str):
-    path = CORPUS / rel
+    path = NOTES_DIR / rel
     async with sem:
         parsed = parse_note(path)
         if parsed is None:

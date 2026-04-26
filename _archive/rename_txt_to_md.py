@@ -18,7 +18,7 @@ for p in CORPUS.rglob("*.txt"):
 print(f"Renamed: {renamed}")
 
 # Update source_path column in TSVs
-for tsv in [CORPUS / "_signal.tsv", CORPUS / "_signal_reclass.tsv"]:
+for tsv in [CORPUS / "_derived" / "_signal.tsv", CORPUS / "_derived" / "_signal_reclass.tsv"]:
     if not tsv.exists():
         continue
     text = tsv.read_text(encoding="utf-8")

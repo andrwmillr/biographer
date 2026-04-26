@@ -18,8 +18,8 @@ from collections import defaultdict
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-SIGNAL_TSV = CORPUS / "_signal.tsv"
-POEMS_TSV = CORPUS / "_poems.tsv"
+SIGNAL_TSV = CORPUS / "_derived" / "_signal.tsv"
+POEMS_TSV = CORPUS / "_derived" / "_poems.tsv"
 
 SUFFIX_RE = re.compile(r" \[(\d+)\](?=\.md$)")
 

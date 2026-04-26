@@ -13,9 +13,10 @@ from collections import Counter
 from pathlib import Path
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
+NOTES_DIR = CORPUS / "notes"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
-OUT_TSV = CORPUS / "_tfidf_quarterly.tsv"
-OUT_MD = CORPUS / "_tfidf_quarterly.md"
+OUT_TSV = CORPUS / "_derived" / "_tfidf_quarterly.tsv"
+OUT_MD = CORPUS / "_derived" / "_tfidf_quarterly.md"
 
 MIN_SLICE_NOTES = 1       # drop quarters with fewer notes than this
 MIN_TOTAL_FREQ = 3        # word must appear at least this many times corpus-wide
@@ -101,7 +102,7 @@ slice_tokens = {}   # quarter -> Counter
 slice_notes = {}    # quarter -> int
 
 for label in WRITING_LABELS:
-    d = CORPUS / label
+    d = NOTES_DIR / label
     if not d.exists():
         continue
     for p in sorted(d.glob("*.md")):

@@ -8,8 +8,8 @@ for literal matches. If any term hits, mark the claim as
 Annotates in-place. Run after `factcheck_narrative.py`.
 
 Usage:
-    python3 _raw/filter_factcheck.py                   # _narrative_naive.factcheck.json
-    python3 _raw/filter_factcheck.py _narrative.factcheck.json
+    python3 _scripts/filter_factcheck.py                   # biography.factcheck.json
+    python3 _scripts/filter_factcheck.py biography.factcheck.json
 """
 import json
 import re
@@ -17,15 +17,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import (  # type: ignore
-    CORPUS,
+from write_biography import (  # type: ignore
     ERAS,
-    NARRATIVES_DIR,
+    BIOGRAPHIES_DIR,
     apply_authorship,
     apply_date_overrides,
     apply_note_about,
     load_authorship,
-    load_phase_a,
+    load_corpus_notes,
     log,
     parse_note_body,
 )
@@ -88,14 +87,14 @@ def notes_in_era(notes, era_idx: int) -> list:
 
 
 def main():
-    target_name = sys.argv[1] if len(sys.argv) > 1 else "_narrative_naive.factcheck.json"
-    target = NARRATIVES_DIR / target_name
+    target_name = sys.argv[1] if len(sys.argv) > 1 else "biography.factcheck.json"
+    target = BIOGRAPHIES_DIR / target_name
     if not target.exists():
         print(f"ERROR: {target} not found")
         sys.exit(1)
 
     log("loading notes...")
-    notes = load_phase_a()
+    notes = load_corpus_notes()
     apply_date_overrides(notes)
     apply_note_about(notes)
     verdicts = load_authorship()

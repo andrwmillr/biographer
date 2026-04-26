@@ -26,12 +26,13 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import ERAS, era_of  # type: ignore
+from write_biography import ERAS, era_of  # type: ignore
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-PHASE_A = CORPUS / "_phase_a.jsonl"
+NOTES_DIR = CORPUS / "notes"
+PHASE_A = CORPUS / "_derived" / "_phase_a.jsonl"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
-STATE_PATH = CORPUS / "_triage_state.json"
+STATE_PATH = CORPUS / "_config" / "_triage_state.json"
 PORT = 8765
 BATCH_SIZE = 15
 RATINGS = (1, 2, 3, 4)
@@ -79,7 +80,7 @@ def load_phase_a():
 def collect_queue():
     rels = []
     for label in WRITING_LABELS:
-        d = CORPUS / label
+        d = NOTES_DIR / label
         if not d.exists():
             continue
         for p in sorted(d.glob("*.md")):
@@ -89,7 +90,7 @@ def collect_queue():
 
 
 def parse_note(rel):
-    path = CORPUS / rel
+    path = NOTES_DIR / rel
     text = path.read_text(encoding="utf-8", errors="replace")
     m = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
     if not m:

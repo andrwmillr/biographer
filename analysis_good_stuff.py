@@ -19,13 +19,14 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
+NOTES_DIR = CORPUS / "notes"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
 MODEL = "claude-sonnet-4-6"
 CONCURRENCY = 5
 MAX_RETRIES = 8
 
-OUT_JSONL = CORPUS / "_good_stuff.jsonl"
-CALIBRATION_OUT = CORPUS / "_good_stuff_calibration.jsonl"
+OUT_JSONL = CORPUS / "_derived" / "_good_stuff.jsonl"
+CALIBRATION_OUT = CORPUS / "_derived" / "_good_stuff_calibration.jsonl"
 
 CALIBRATION_MODE = True
 CALIBRATION_YEARS = ["2013", "2016", "2020", "2025"]
@@ -90,7 +91,7 @@ def sample_body(body: str) -> str:
 
 
 async def process_one(client, sem, rel):
-    path = CORPUS / rel
+    path = NOTES_DIR / rel
     async with sem:
         parsed = parse_note(path)
         if parsed is None:
@@ -127,7 +128,7 @@ async def process_one(client, sem, rel):
 def collect_targets():
     targets = []
     for label in WRITING_LABELS:
-        d = CORPUS / label
+        d = NOTES_DIR / label
         if not d.exists():
             continue
         for p in sorted(d.glob("*.md")):

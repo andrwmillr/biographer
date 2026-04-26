@@ -15,7 +15,7 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 CORPUS = Path.home() / "notes-archive" / "_corpus"
-OUT_TSV = CORPUS / "_signal.tsv"
+OUT_TSV = CORPUS / "_derived" / "_signal.tsv"
 MODEL = "claude-haiku-4-5-20251001"
 CONCURRENCY = 3
 MAX_RETRIES = 8

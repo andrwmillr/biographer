@@ -18,17 +18,52 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import (  # type: ignore
+from write_biography import (  # type: ignore
     CORPUS,
-    apply_triage_overrides,
-    load_phase_a,
     parse_note_body,
 )
 
 MODEL = "claude-sonnet-4-6"
 CONCURRENCY = 5
 MAX_RETRIES = 8
-OUT_JSONL = CORPUS / "_authorship.jsonl"
+OUT_JSONL = CORPUS / "_derived" / "_authorship.jsonl"
+PHASE_A = CORPUS / "_derived" / "_phase_a.jsonl"
+TRIAGE_STATE = CORPUS / "_config" / "_triage_state.json"
+RATING_TO_SIG = {1: "skip", 2: "minor", 3: "notable", 4: "keeper"}
+
+
+def load_phase_a():
+    """Return list of dicts from _phase_a.jsonl: rel, title, date, body_chars,
+    significance, kernel, themes. Latest row wins per rel."""
+    out = {}
+    if not PHASE_A.exists():
+        return []
+    for line in PHASE_A.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "error" in r or "rel" not in r:
+            continue
+        out[r["rel"]] = r
+    return list(out.values())
+
+
+def apply_triage_overrides(notes):
+    """Override n['significance'] from manual ratings in _triage_state.json."""
+    if not TRIAGE_STATE.exists():
+        return 0
+    state = json.loads(TRIAGE_STATE.read_text())
+    decisions = state.get("decisions", {})
+    applied = 0
+    for n in notes:
+        rating = decisions.get(n["rel"])
+        if rating in RATING_TO_SIG:
+            n["significance"] = RATING_TO_SIG[rating]
+            applied += 1
+    return applied
 
 MAX_CHARS = 3000
 HEAD_CHARS = 1500

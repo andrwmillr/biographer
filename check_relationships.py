@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Scan a narrative for relationship claims and flag any that contradict
-`_people.json` or aren't backed by it. Used after `narrative_phase_b.py`
+`_people.json` or aren't backed by it. Used after `write_biography.py`
 runs without the PEOPLE block (to avoid biasing generation).
 
 For each paragraph, ask Haiku to identify every sentence that asserts a
@@ -11,8 +11,8 @@ Output: `<narrative>.relationships.json` with only paragraphs that have
 flagged claims.
 
 Usage:
-    python3 _raw/check_relationships.py                    # _narrative_naive.md
-    python3 _raw/check_relationships.py _narrative.md
+    python3 _scripts/check_relationships.py                    # biography.md
+    python3 _scripts/check_relationships.py biography.md
 """
 import asyncio
 import json
@@ -21,8 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from narrative_phase_b import (  # type: ignore
-    NARRATIVES_DIR,
+from write_biography import (  # type: ignore
+    BIOGRAPHIES_DIR,
     format_people_block,
     load_people,
     log,
@@ -117,8 +117,8 @@ async def check_paragraph(client, paragraph, people_block):
 
 
 async def main():
-    target_name = sys.argv[1] if len(sys.argv) > 1 else "_narrative_naive.md"
-    target = NARRATIVES_DIR / target_name
+    target_name = sys.argv[1] if len(sys.argv) > 1 else "biography.md"
+    target = BIOGRAPHIES_DIR / target_name
     if not target.exists():
         print(f"ERROR: {target} not found")
         sys.exit(1)
@@ -158,7 +158,7 @@ async def main():
             flagged.append({"line": r["line"], "paragraph": r["paragraph"], "flagged_claims": bad})
 
     out_name = target.stem + ".relationships.json"
-    out_path = NARRATIVES_DIR / out_name
+    out_path = BIOGRAPHIES_DIR / out_name
     out_path.write_text(json.dumps(flagged, indent=2, ensure_ascii=False), encoding="utf-8")
 
     n_contradict = sum(1 for r in flagged for c in r["flagged_claims"] if c["verdict"] == "CONTRADICTS_PEOPLE")
