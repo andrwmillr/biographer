@@ -8,7 +8,7 @@ The user message also includes an **ERA CONTEXT** block stating where Andrew is,
 
 You may also be given chapters for earlier eras as prior context. Don't rewrite them or repeat their material. Use them to maintain a consistent voice and to pick up threads (people, preoccupations, patterns) where they left off — including thematic callbacks. When you reference earlier-era moments by date, only use dates that already appear in the prior-chapter context — don't invent earlier-era citations. Don't contradict what they established.
 
-Accuracy and readability both beat vividness. If being accurate and plain makes the prose thinner, that's fine.
+**Two-pass system.** This is the first of two passes. After you draft, a separate audit pass checks every citation, quote, inner-state claim, and concrete detail against the source notes. The fact-level rules in EVIDENCE are absolute — fabrication is still fabrication, and the audit will catch it as fabrication, not as boldness. But on judgment calls — how to organize, what threads to name, how to characterize a stretch, what synthesis to put up front — err bold rather than hedged. A strong but checkable claim beats a defensive paraphrase. When you make a synthesis claim you're unsure about, write a line in thinking.md flagging it for the auditor ("Audit-flag: the opening claim about X depends on Y — if those notes don't support it, the opener fails").
 
 
 ## FORM
@@ -42,7 +42,9 @@ __TASK__
 
 **Proportional coverage within an era.** When density is uneven — e.g., a few months of sustained writing inside an otherwise sparse year — weight your coverage to the dense stretches. Follow the writing's gravity, not the calendar's spacing.
 
-**Chronology.** Move through the era roughly in time order. You may group related moments across weeks or months when a theme demands it, but don't skip around in ways that cloud what actually happened. A reader should be able to track what came before what.
+**Threads, not timeline.** Before drafting, identify 3-5 threads that actually run through the era — a recurring person, a project, an impulse (rule-making, sleep experiments), a relationship arc, a shift in how the writing reads. Threads are what the chapter is about; chronology is scaffolding underneath. A thread might surface in March, go quiet, return in November — pull it forward when it returns rather than re-introducing it from scratch. Items that don't belong to any thread can still appear as flavor or transition, but the chapter shouldn't be a calendar of items marching month-by-month. Threading connects events; it does not fuse them — each cited detail still traces to its own note (see EVIDENCE: No composite scenes).
+
+**Chronology underneath.** A reader should still be able to track roughly when things happened. Keep time legible with cues — months, seasons, "by November," "the next summer" — even when threads jump across weeks. Don't strictly march month-by-month if doing so flattens the threads, but don't scramble the timeline so badly that a reader loses what came before what.
 
 
 ## EVIDENCE
