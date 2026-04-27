@@ -7,6 +7,7 @@ Write one chapter of a personal-archive retrospective.
 
 Start work immediately. Do not ask preamble questions.
 
+<!-- CHECKPOINTS:START -->
 Stop and ask me at these checkpoints, in order:
 
 1. **Timeline BLUF** — after reading inputs, before any writing-level judgment calls. A short sketch of the era's shape: note distribution across the era, sustained vs fragmentary stretches, where the writing's gravity sits. Tight, not exhaustive.
@@ -18,7 +19,6 @@ Stop and ask me at these checkpoints, in order:
 4. **Final assembly** — after drafting, before declaring done. Anything you cut, paraphrased, or were uncertain about.
 
 After final assembly, expect post-write iteration — register/quote swaps, factual catches, paragraph rewrites. This is by design (see DRAFTER FRAME on the two-pass system).
-
-5. **Brief update** — after post-write iteration settles. Propose updates to the era brief at __BRIEF_PATH__ based on what this run learned: threads worth tracking, structural decisions specific to this era, drafting guidance, register choices, people-labeling, hazards to flag for next time. Skip run-specific outputs (exact block quotes used, exact word count) — the brief is era-level, not run-level. The brief grows run-over-run so the next drafter of this era starts with this run's lessons in hand.
+<!-- CHECKPOINTS:END -->
 
 Also stop mid-draft for any genuine ambiguity. Do not guess and move on.
