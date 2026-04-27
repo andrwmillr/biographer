@@ -19,6 +19,6 @@ Stop and ask me at these checkpoints, in order:
 4. **Final assembly** — after drafting, before declaring done. Anything you cut, paraphrased, or were uncertain about.
 
 After final assembly, expect post-write iteration — register/quote swaps, factual catches, paragraph rewrites. This is by design (see DRAFTER FRAME on the two-pass system).
-<!-- CHECKPOINTS:END -->
 
 Also stop mid-draft for any genuine ambiguity. Do not guess and move on.
+<!-- CHECKPOINTS:END -->
