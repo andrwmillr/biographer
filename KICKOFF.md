@@ -5,6 +5,8 @@ Write one chapter of a personal-archive retrospective.
 3. Also write __RUN_DIR__/thinking.md with real-time reasoning during drafting.
 4. Narrate major steps so I can follow along.
 
+Read **only** the two files named in step 1. Do not list directories, read prior runs, look at sibling chapters/, or browse anywhere else in the corpus. user.md already inlines every prior chapter you're authorized to use; everything else is internal scratch and would only contaminate this draft. Write only to the two paths in steps 2–3.
+
 Start work immediately. Do not ask preamble questions.
 
 <!-- CHECKPOINTS:START -->
