@@ -1,0 +1,610 @@
+#!/usr/bin/env python3
+"""Local-only FastAPI shim around write_biography.py.
+
+Endpoints:
+  GET  /eras          -> [{name, start, end, note_count, has_chapter}]
+  POST /draft         -> SSE stream of {type, ...} events for one era (one-shot)
+  WS   /session       -> bidirectional draft session with KICKOFF checkpoints
+
+Run:
+  uv run --with 'fastapi[standard]' --with anthropic --with pyyaml \
+    --with claude-agent-sdk fastapi dev _web/server.py
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "_scripts"))
+
+_env_file = REPO / "_scripts" / ".env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        # Skip ANTHROPIC_API_KEY — we want claude-agent-sdk to use the
+        # user's Claude Code subscription, not bill the API account.
+        if k == "ANTHROPIC_API_KEY":
+            continue
+        if not os.environ.get(k):
+            os.environ[k] = v.strip().strip('"').strip("'")
+# Belt-and-suspenders: also remove it if it was already in the shell env.
+os.environ.pop("ANTHROPIC_API_KEY", None)
+
+import write_biography as wb  # noqa: E402
+from claude_agent_sdk import (  # noqa: E402
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    AssistantMessage,
+    UserMessage,
+    ResultMessage,
+    ToolUseBlock,
+    ToolResultBlock,
+)
+from claude_agent_sdk.types import StreamEvent  # noqa: E402
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _load_state():
+    notes = wb.load_corpus_notes()
+    wb.apply_date_overrides(notes)
+    verdicts = wb.load_authorship()
+    notes, _, _ = wb.apply_authorship(notes, verdicts)
+    wb.apply_note_metadata(notes)
+    wb.flag_date_clusters(notes)
+    by_era = {name: [] for name, _, _ in wb.ERAS}
+    for n in notes:
+        e = wb.era_of(n.get("date", ""))
+        if e in by_era:
+            by_era[e].append(n)
+    briefs = wb.load_era_brief()
+    return notes, by_era, briefs
+
+
+@app.get("/eras")
+def list_eras():
+    _, by_era, _ = _load_state()
+    out = []
+    for name, start, end in wb.ERAS:
+        chapter_path = wb.CHAPTERS_DIR / f"{wb.era_slug(name)}.md"
+        out.append({
+            "name": name,
+            "start": start,
+            "end": end if end != "9999-99" else None,
+            "note_count": len(by_era[name]),
+            "has_chapter": chapter_path.exists(),
+        })
+    return out
+
+
+_FRONT_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+
+
+def _note_source(rel: str) -> str:
+    path = wb.NOTES_DIR / rel
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    m = _FRONT_RE.match(text)
+    if not m:
+        return ""
+    for line in m.group(1).splitlines():
+        if line.startswith("source:"):
+            return line.partition(":")[2].strip().strip('"').strip("'")
+    return ""
+
+
+@app.get("/notes")
+def list_notes(era: str):
+    _, by_era, _ = _load_state()
+    if era not in by_era:
+        raise HTTPException(404, f"unknown era: {era}")
+    notes = sorted(by_era[era], key=lambda n: n.get("date", ""))
+    out = []
+    for n in notes:
+        rel = n["rel"]
+        label = rel.split("/", 1)[0] if "/" in rel else ""
+        item = {
+            "rel": rel,
+            "date": n.get("date", ""),
+            "title": n.get("title", ""),
+            "label": label,
+            "source": _note_source(rel),
+            "body": wb.parse_note_body(rel),
+        }
+        if n.get("editor_note"):
+            item["editor_note"] = n["editor_note"]
+        out.append(item)
+    return out
+
+
+class DraftRequest(BaseModel):
+    era: str
+
+
+class PromoteRequest(BaseModel):
+    era: str
+    run_dir: str  # repo-relative run dir, e.g. _corpus/.../runs/2026-04-27T...
+
+
+def _prepare_run(era_name: str) -> dict:
+    """Build the prompt inputs and create a fresh run dir on disk.
+    Returns {run_dir, run_rel, full_user_msg, notes_count, prior_count, in_chars}."""
+    _, by_era, briefs = _load_state()
+    if era_name not in by_era:
+        raise HTTPException(404, f"unknown era: {era_name}")
+    notes = by_era[era_name]
+    if not notes:
+        raise HTTPException(400, f"era has no notes: {era_name}")
+    prior = wb.load_prior_chapters(era_name)
+    prior_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in prior]
+    era_msg = wb.build_user_msg(era_name, notes, era_brief=briefs.get(era_name, ""))
+
+    parts = []
+    if prior_blocks:
+        parts.append(
+            "--- PRIOR CHAPTERS (earlier eras in this retrospective — for continuity only; do not rewrite or repeat) ---\n\n"
+        )
+        for ch in prior_blocks:
+            parts.append(ch + "\n\n")
+        parts.append("--- END PRIOR CHAPTERS ---\n\n")
+    parts.append(era_msg)
+    full_user_msg = "".join(parts)
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    slug = wb.era_slug(era_name)
+    run_dir = wb.BIOGRAPHIES_DIR / "_dump" / slug / "runs" / timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "system.md").write_text(wb.CHAPTER_SYSTEM, encoding="utf-8")
+    (run_dir / "user.md").write_text(full_user_msg, encoding="utf-8")
+    return {
+        "run_dir": run_dir,
+        "run_rel": str(run_dir.relative_to(REPO)),
+        "full_user_msg": full_user_msg,
+        "notes_count": len(notes),
+        "prior_count": len(prior_blocks),
+        "in_chars": len(full_user_msg),
+    }
+
+
+@app.post("/promote")
+def promote(req: PromoteRequest):
+    run_dir = (REPO / req.run_dir).resolve()
+    # Reject paths that escape the biographies dump tree.
+    bio_root = (wb.BIOGRAPHIES_DIR / "_dump").resolve()
+    try:
+        rel = run_dir.relative_to(bio_root)
+    except ValueError:
+        raise HTTPException(400, "run_dir must be under biographies/_dump/")
+    # Derive destination slug from the run_dir path itself: <era_slug>/runs/<ts>.
+    # Trusting req.era was a footgun — the user could change the dropdown after
+    # a session ended and overwrite the wrong chapter.
+    parts = rel.parts
+    if len(parts) < 3 or parts[1] != "runs":
+        raise HTTPException(400, f"unexpected run_dir layout: {req.run_dir}")
+    slug = parts[0]
+    expected_slug = wb.era_slug(req.era)
+    if slug != expected_slug:
+        raise HTTPException(
+            400,
+            f"run_dir era ({slug}) does not match selected era ({expected_slug}). "
+            f"Refusing to promote to avoid overwriting the wrong chapter.",
+        )
+    src = run_dir / "output.md"
+    if not src.is_file():
+        raise HTTPException(404, f"no output.md in {req.run_dir}")
+    dst = wb.CHAPTERS_DIR / f"{slug}.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    overwritten = dst.exists()
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    return {
+        "src": str(src.relative_to(REPO)),
+        "dst": str(dst.relative_to(REPO)),
+        "overwritten": overwritten,
+        "words": len(src.read_text(encoding="utf-8").split()),
+    }
+
+
+@app.post("/draft")
+async def draft(req: DraftRequest):
+    _, by_era, briefs = _load_state()
+    if req.era not in by_era:
+        raise HTTPException(404, f"unknown era: {req.era}")
+    notes = by_era[req.era]
+    if not notes:
+        raise HTTPException(400, f"era has no notes: {req.era}")
+    prior = wb.load_prior_chapters(req.era)
+    prior_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in prior]
+    era_msg = wb.build_user_msg(req.era, notes, era_brief=briefs.get(req.era, ""))
+
+    user_blocks = []
+    if prior_blocks:
+        user_blocks.append({
+            "type": "text",
+            "text": "--- PRIOR CHAPTERS (earlier eras in this retrospective — for continuity only; do not rewrite or repeat) ---\n\n",
+        })
+        for i, ch in enumerate(prior_blocks):
+            block = {"type": "text", "text": ch + "\n\n"}
+            if i == len(prior_blocks) - 1:
+                block["cache_control"] = {"type": "ephemeral"}
+            user_blocks.append(block)
+        user_blocks.append({"type": "text", "text": "--- END PRIOR CHAPTERS ---\n\n"})
+    user_blocks.append({"type": "text", "text": era_msg})
+
+    full_user_msg = "".join(b["text"] for b in user_blocks)
+    in_chars = len(full_user_msg)
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    slug = wb.era_slug(req.era)
+    run_dir = wb.BIOGRAPHIES_DIR / "_dump" / slug / "runs" / timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "system.md").write_text(wb.CHAPTER_SYSTEM, encoding="utf-8")
+    (run_dir / "user.md").write_text(full_user_msg, encoding="utf-8")
+    run_rel = str(run_dir.relative_to(REPO))
+
+    async def gen():
+        def sse(obj):
+            return f"data: {json.dumps(obj)}\n\n"
+
+        yield sse({
+            "type": "start",
+            "era": req.era,
+            "notes": len(notes),
+            "prior_chapters": len(prior_blocks),
+            "input_chars": in_chars,
+            "model": wb.MODEL,
+            "run_dir": run_rel,
+        })
+
+        chunks: list[str] = []
+        result_evt: dict | None = None
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude",
+                "-p",
+                "--model", wb.MODEL,
+                "--system-prompt", wb.CHAPTER_SYSTEM,
+                "--output-format", "stream-json",
+                "--include-partial-messages",
+                "--verbose",
+                "--no-session-persistence",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            assert proc.stdin is not None and proc.stdout is not None
+
+            async def feed_stdin():
+                proc.stdin.write(full_user_msg.encode("utf-8"))
+                await proc.stdin.drain()
+                proc.stdin.close()
+
+            stdin_task = asyncio.create_task(feed_stdin())
+
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = evt.get("type")
+                if t == "stream_event":
+                    inner = evt.get("event", {})
+                    itype = inner.get("type")
+                    if itype == "content_block_delta":
+                        delta = inner.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                chunks.append(text)
+                                yield sse({"type": "delta", "text": text})
+                    elif itype == "message_start":
+                        yield sse({"type": "status", "status": "generating"})
+                elif t == "system":
+                    sub = evt.get("subtype")
+                    if sub == "status":
+                        yield sse({"type": "status", "status": evt.get("status", "")})
+                    elif sub == "init":
+                        yield sse({"type": "status", "status": "spawned"})
+                elif t == "result":
+                    result_evt = evt
+
+            await stdin_task
+            rc = await proc.wait()
+
+            (run_dir / "output.md").write_text("".join(chunks), encoding="utf-8")
+
+            if rc != 0 and not result_evt:
+                stderr = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
+                yield sse({"type": "error", "message": f"claude exited {rc}: {stderr[-500:]}", "run_dir": run_rel})
+                return
+
+            usage = (result_evt or {}).get("usage", {}) if result_evt else {}
+            yield sse({
+                "type": "done",
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cache_read": usage.get("cache_read_input_tokens", 0) or 0,
+                "cache_write": usage.get("cache_creation_input_tokens", 0) or 0,
+                "stop_reason": (result_evt or {}).get("stop_reason", ""),
+                "cost_usd": (result_evt or {}).get("total_cost_usd", 0),
+                "run_dir": run_rel,
+            })
+        except Exception as e:
+            if chunks:
+                (run_dir / "output.partial.md").write_text(
+                    "".join(chunks), encoding="utf-8"
+                )
+            if proc and proc.returncode is None:
+                proc.kill()
+            yield sse({"type": "error", "message": str(e), "run_dir": run_rel})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+KICKOFF_PATH = REPO / "_scripts" / "KICKOFF.md"
+
+
+def _build_kickoff(run_dir_abs: Path, user_msg: str) -> str:
+    """Read KICKOFF.md, substitute __RUN_DIR__, strip checkpoint markers,
+    append the era inputs between INPUT-START / INPUT-END. Mirrors run.sh."""
+    kickoff = KICKOFF_PATH.read_text(encoding="utf-8")
+    kickoff = kickoff.replace("__RUN_DIR__", str(run_dir_abs))
+    kickoff = kickoff.replace("<!-- CHECKPOINTS:START -->\n", "").replace(
+        "<!-- CHECKPOINTS:END -->\n", ""
+    )
+    return (
+        kickoff.rstrip("\n")
+        + "\n\n--- INPUT-START ---\n\n"
+        + user_msg
+        + "\n\n--- INPUT-END ---\n"
+    )
+
+
+@app.websocket("/session")
+async def session(ws: WebSocket):
+    await ws.accept()
+    tasks: list[asyncio.Task] = []
+    run_dir: Path | None = None
+    cumulative_cost = 0.0
+
+    async def send(obj: dict):
+        try:
+            await ws.send_text(json.dumps(obj))
+        except Exception:
+            pass
+
+    try:
+        first = await ws.receive_json()
+        if first.get("type") != "start" or not first.get("era"):
+            await send({"type": "error", "message": "first message must be {type:'start', era}"})
+            return
+
+        try:
+            inputs = _prepare_run(first["era"])
+        except HTTPException as e:
+            await send({"type": "error", "message": e.detail})
+            return
+
+        run_dir = inputs["run_dir"]
+        run_dir_abs = run_dir.resolve()
+        kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"])
+
+        # Cross-iteration blinding via per-run settings.
+        runs_parent_abs = run_dir_abs.parent
+        settings = {
+            "permissions": {
+                "deny": [
+                    f"Read({runs_parent_abs}/**)",
+                    f"Edit({runs_parent_abs}/**)",
+                    f"Write({runs_parent_abs}/**)",
+                ],
+                "allow": [
+                    f"Read({run_dir_abs}/**)",
+                    f"Edit({run_dir_abs}/**)",
+                    f"Write({run_dir_abs}/**)",
+                ],
+            }
+        }
+        settings_path = run_dir / ".claude-settings.json"
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+        await send({
+            "type": "spawned",
+            "era": first["era"],
+            "model": wb.MODEL,
+            "run_dir": inputs["run_rel"],
+            "notes": inputs["notes_count"],
+            "prior_chapters": inputs["prior_count"],
+            "input_chars": inputs["in_chars"],
+        })
+
+        # Watch output.md / thinking.md and stream changes to the client.
+        async def watch_files():
+            paths = {
+                "output": run_dir / "output.md",
+                "thinking": run_dir / "thinking.md",
+            }
+            mtimes: dict[str, float] = {}
+            while True:
+                await asyncio.sleep(0.5)
+                for kind, p in paths.items():
+                    try:
+                        m = p.stat().st_mtime
+                    except FileNotFoundError:
+                        continue
+                    if mtimes.get(kind) != m:
+                        mtimes[kind] = m
+                        try:
+                            content = p.read_text(encoding="utf-8")
+                        except Exception:
+                            continue
+                        await send({"type": f"{kind}_update", "content": content})
+
+        watch_task = asyncio.create_task(watch_files())
+        tasks = [watch_task]
+
+        loop = asyncio.get_running_loop()
+
+        async def stderr_cb(line: str):
+            # Forward stderr lines from the underlying claude process so we
+            # can show real progress signals (if any) to the client.
+            line = (line or "").strip()
+            if not line:
+                return
+            await send({"type": "log", "text": line})
+
+        def stderr_sync(line: str):
+            asyncio.run_coroutine_threadsafe(stderr_cb(line), loop)
+
+        # Don't leak our API key into the claude subprocess — we want it to
+        # use the user's Claude Code subscription, not bill the API account.
+        sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        options = ClaudeAgentOptions(
+            model=wb.MODEL,
+            system_prompt=wb.CHAPTER_SYSTEM,
+            permission_mode="acceptEdits",
+            allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
+            settings=str(settings_path),
+            cwd=str(run_dir_abs),
+            include_partial_messages=True,
+            stderr=stderr_sync,
+            env=sub_env,
+        )
+
+        async with ClaudeSDKClient(options=options) as client:
+            # Coroutine: drain one turn's worth of messages and forward them.
+            async def drain_turn():
+                nonlocal cumulative_cost
+                await send({"type": "status", "status": "generating"})
+                async for msg in client.receive_response():
+                    if isinstance(msg, StreamEvent):
+                        event = msg.event if hasattr(msg, "event") else {}
+                        etype = event.get("type")
+                        if etype == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                if text:
+                                    await send({"type": "narration", "text": text})
+                    elif isinstance(msg, AssistantMessage):
+                        # With partial messages on, text already streamed via
+                        # StreamEvent — only forward tool_use blocks here.
+                        for block in msg.content:
+                            if isinstance(block, ToolUseBlock):
+                                await send({
+                                    "type": "tool_use",
+                                    "id": block.id,
+                                    "name": block.name,
+                                    "input": block.input or {},
+                                })
+                    elif isinstance(msg, UserMessage):
+                        for block in msg.content if isinstance(msg.content, list) else []:
+                            if isinstance(block, ToolResultBlock):
+                                tr = block.content
+                                if isinstance(tr, list):
+                                    tr = "".join(
+                                        getattr(x, "text", "") or str(x) for x in tr
+                                    )
+                                tr = str(tr or "")
+                                if len(tr) > 600:
+                                    tr = tr[:600] + "…"
+                                await send({
+                                    "type": "tool_result",
+                                    "id": block.tool_use_id,
+                                    "is_error": bool(block.is_error),
+                                    "text": tr,
+                                })
+                    elif isinstance(msg, ResultMessage):
+                        cumulative_cost = msg.total_cost_usd or cumulative_cost
+                        usage = getattr(msg, "usage", None) or {}
+                        await send({
+                            "type": "turn_end",
+                            "cost_usd": cumulative_cost,
+                            "stop_reason": getattr(msg, "stop_reason", "") or "",
+                            "usage": usage,
+                        })
+                await send({"type": "status", "status": "awaiting_reply"})
+
+            # Kick off the first turn with the inlined inputs.
+            await client.query(kickoff)
+            turn_task = asyncio.create_task(drain_turn())
+
+            while True:
+                # Wait for either the client or the current turn to finish.
+                client_recv = asyncio.create_task(ws.receive_json())
+                done, _ = await asyncio.wait(
+                    [client_recv, turn_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if client_recv in done:
+                    try:
+                        msg = client_recv.result()
+                    except WebSocketDisconnect:
+                        break
+                    mtype = msg.get("type")
+                    if mtype == "stop":
+                        break
+                    if mtype == "reply":
+                        text = (msg.get("text") or "").strip()
+                        if not text:
+                            continue
+                        # Wait for current turn to drain before sending the next.
+                        if not turn_task.done():
+                            await turn_task
+                        await client.query(text)
+                        turn_task = asyncio.create_task(drain_turn())
+                else:
+                    # Turn ended; cancel the dangling receive and loop to wait
+                    # for the next user message.
+                    client_recv.cancel()
+                    try:
+                        await client_recv
+                    except (asyncio.CancelledError, WebSocketDisconnect):
+                        pass
+
+            await send({
+                "type": "done",
+                "cost_usd": cumulative_cost,
+                "run_dir": str(run_dir.relative_to(REPO)),
+            })
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await send({"type": "error", "message": f"{type(e).__name__}: {e}"})
+    finally:
+        for tk in tasks:
+            tk.cancel()
+        try:
+            await ws.close()
+        except Exception:
+            pass
