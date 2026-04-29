@@ -5,7 +5,7 @@ You are auditing a chapter draft against the source notes it was written from.
 You'll receive:
 1. **DRAFT** — the chapter the drafter produced (markdown).
 2. **NOTES** — the full text of every note in the era, chronologically. Same input the drafter saw. Each note headed with date, label, and title.
-3. **ERA CONTEXT** — authoritative facts about where Andrew is, what he's doing, his life stage in this era.
+3. **ERA CONTEXT** — authoritative facts about where __SUBJECT__ is, what he's doing, his life stage in this era.
 
 Your job: flag classes of factual error so a human can decide what to do.
 
@@ -31,23 +31,23 @@ Sentences about themes, patterns, or how the writing feels (without naming speci
 
 *Example:* draft says `he writes from a cheap sublet in Pilsen [2016-03-14]`. Note for that date talks about Pilsen but doesn't mention sublet/rent/cost. Flag: "cheap sublet" not established by source.
 
-**3. ASSERTED INNER STATES.** Statements presenting Andrew's mental state as a fact rather than as a marked reading.
+**3. ASSERTED INNER STATES.** Statements presenting __SUBJECT__'s mental state as a fact rather than as a marked reading.
 - Flag: "he was anxious that week", "he felt stuck", "he knew it wouldn't last", "he was happy that day"
 - Don't flag: "the week reads as anxious", "the writing sounds tired", "reading these together, he seems stuck", "the entries have the texture of exhaustion"
 
 The marker ("reads as", "sounds", "seems", "has the texture of") is what makes the difference. With a marker → reading. Without → asserted fact.
 
-**4. UNSUPPORTED RELATIONSHIP LABELS.** Roles requiring the other person to ratify them ("girlfriend", "boyfriend", "brother", "sister", "roommate", "colleague", "best friend", "partner", "fiancé") not corroborated by the notes or ERA CONTEXT. Headspace labels that describe Andrew's side of a dynamic (crush, friend, classmate) are allowed when notes show the dynamic — don't flag those.
+**4. UNSUPPORTED RELATIONSHIP LABELS.** Roles requiring the other person to ratify them ("girlfriend", "boyfriend", "brother", "sister", "roommate", "colleague", "best friend", "partner", "fiancé") not corroborated by the notes or ERA CONTEXT. Headspace labels that describe __SUBJECT__'s side of a dynamic (crush, friend, classmate) are allowed when notes show the dynamic — don't flag those.
 
-*Example:* draft says `his girlfriend Mollie`. ERA CONTEXT doesn't establish a relationship. Notes show preoccupation but no explicit "girlfriend" labeling by Andrew or in the people block. Flag.
+*Example:* draft says `his girlfriend Mollie`. ERA CONTEXT doesn't establish a relationship. Notes show preoccupation but no explicit "girlfriend" labeling by __SUBJECT__ or in the people block. Flag.
 
-**5. UNSUPPORTED IDENTITY/AMBITION CLAIMS.** Statements like "he wants to be a fiction writer", "he becomes a poet", "he's trying to be Y", "he's studying philosophy" without a note explicitly naming the aspiration. Poems in the archive don't establish "poet"; philosophy notes don't establish "studying philosophy." If a note quotes Andrew naming the aspiration, the claim is fine — otherwise flag.
+**5. UNSUPPORTED IDENTITY/AMBITION CLAIMS.** Statements like "he wants to be a fiction writer", "he becomes a poet", "he's trying to be Y", "he's studying philosophy" without a note explicitly naming the aspiration. Poems in the archive don't establish "poet"; philosophy notes don't establish "studying philosophy." If a note quotes __SUBJECT__ naming the aspiration, the claim is fine — otherwise flag.
 
 **6. COMPOSITE SCENES.** A sentence naming an action + place + time where those details come from different notes. Each cited detail must trace to a single note. Even when two notes are a few weeks apart and both involve, say, coffee shops, they are not one event.
 
 *Example:* draft says `he writes the Mollie poem at the coffee shop on Western [2017-08-14]`. The poem comes from the 2017-08-14 note, but "coffee shop on Western" comes from a different note's setting. Flag.
 
-**7. EMBEDDED-MATERIAL MISATTRIBUTION.** A quote attributed to Andrew that's actually quoting another writer in a "⚠ MIXED" note. Look for: indented quote blocks, lines following attributions ("Sacks:", "Lemire:"), text after "——" separators, polished self-help / lyric register that breaks from Andrew's voice.
+**7. EMBEDDED-MATERIAL MISATTRIBUTION.** A quote attributed to __SUBJECT__ that's actually quoting another writer in a "⚠ MIXED" note. Look for: indented quote blocks, lines following attributions ("Sacks:", "Lemire:"), text after "——" separators, polished self-help / lyric register that breaks from __SUBJECT__'s voice.
 
 **8. ERA-CONTEXT CONTRADICTIONS.** Any claim in the draft that contradicts what ERA CONTEXT establishes (school status, location, life stage, jobs, etc.). ERA CONTEXT is authoritative; the era heading is not — if the draft inferred school/location from the era heading and ERA CONTEXT says otherwise, flag.
 

@@ -40,12 +40,15 @@ def ts():
 def log(msg):
     print(f"{ts()} {msg}", flush=True)
 
-CORPUS = Path.home() / "notes-archive" / "_corpus"
+CORPUS = Path(os.environ.get("CORPUS_DIR") or Path.home() / "notes-archive" / "_corpus")
+SUBJECT_NAME = os.environ.get("SUBJECT_NAME", "Andrew")
 NOTES_DIR = CORPUS / "notes"
 AUTHORSHIP = CORPUS / "_derived" / "_authorship.jsonl"
 CORPUS_CACHE = CORPUS / "_derived" / "_corpus_cache.pkl"
 DATE_OVERRIDES = CORPUS / "_config" / "_date_overrides.json"
-NOTE_ABOUT = CORPUS / "_config" / "_note_about.json"
+NOTE_METADATA = CORPUS / "_config" / "_note_metadata.json"
+EDITOR_NOTE_PREFIX = "EDITOR NOTE:"
+MIXED_AUTHORSHIP_NOTE = "Contains quoted material — not all of this note is Andrew's own writing."
 PEOPLE = CORPUS / "_config" / "_people.json"
 ERAS_FILE = CORPUS / "_config" / "eras.yaml"
 ERAS_BODY_DIR = CORPUS / "_config" / "eras"
@@ -120,10 +123,14 @@ def _is_dirty():
         return False
 MAX_RETRIES = 8
 
-WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
+WRITING_LABELS = ["journal", "creative", "poetry", "letter", "fiction"]
 
 def era_slug(name):
-    return name.replace(" ", "_").replace("/", "-")
+    base = name.replace(" ", "_").replace("/", "-")
+    for i, (n, _, _) in enumerate(ERAS, start=1):
+        if n == name:
+            return f"{i:02d}_{base}"
+    return base
 
 
 def _prev_month(ym):
@@ -161,9 +168,10 @@ MIN_PER_NOTE = 400
 
 CHAPTER_SYSTEM = (Path(__file__).parent / "DRAFTER.md").read_text(encoding="utf-8")
 CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__TASK__", TASK_VARIANTS[TASK_VARIANT])
+CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__SUBJECT__", SUBJECT_NAME)
 
 
-SUMMARY_SYSTEM = """You are writing the opening synthesis to a retrospective on Andrew's personal writing archive, 2011-2026. Plain third-person voice — a thoughtful biographer, not a literary critic.
+SUMMARY_SYSTEM = """You are writing the opening synthesis to a retrospective on __SUBJECT__'s personal writing archive, 2011-2026. Plain third-person voice — a thoughtful biographer, not a literary critic.
 
 You'll receive five era chapters. Write 250-450 words covering the through-lines: what preoccupied him across all fifteen years, what changed, what didn't, what the arc looks like from a distance.
 
@@ -175,8 +183,9 @@ ABSOLUTE RULES
 - If you use a quote or specific detail from a chapter, keep any [YYYY-MM-DD] citation it carries.
 - No invented imagery. Abstract patterns are fine without citation; specifics need the source chapter's anchor.
 - No "in conclusion", no enumerating the era names, no "this retrospective".
-- Third person for Andrew. No sentimentalizing.
+- Third person for __SUBJECT__. No sentimentalizing.
 - If being accurate and plain makes the paragraph thinner, that's fine."""
+SUMMARY_SYSTEM = SUMMARY_SYSTEM.replace("__SUBJECT__", SUBJECT_NAME)
 
 
 def parse_note_body(rel):
@@ -262,23 +271,26 @@ def apply_date_overrides(notes):
     return applied
 
 
-def apply_note_about(notes):
-    """Stamp n["about"] = freeform contextual guidance for individual notes.
-    Two kinds of use today:
+def apply_note_metadata(notes):
+    """Stamp n["editor_note"] = freeform contextual guidance for individual
+    notes. Examples:
     - Retrospective: note written in year Y describes events from year X
-      (the entry should say what era to place the scenes in).
+      (entry says what era to place the scenes in).
     - Pseudonym/disambiguation: a name in the note is altered, or a referent
-      is non-obvious (the entry should clarify identity without changing era).
-    Each json entry should carry whatever guidance it needs; the user.md
-    renderer prepends a "⚠ ABOUT:" tag and emits the entry verbatim."""
-    if not NOTE_ABOUT.exists():
+      is non-obvious (entry clarifies identity without changing era).
+    - Authorship: appended automatically for mixed/unclear verdicts.
+    The user.md renderer prepends EDITOR_NOTE_PREFIX and emits verbatim.
+    If a note already has an editor_note (e.g. from apply_authorship), this
+    appends to it with a space separator so multiple sources coexist."""
+    if not NOTE_METADATA.exists():
         return 0
-    overrides = json.loads(NOTE_ABOUT.read_text())
+    overrides = json.loads(NOTE_METADATA.read_text())
     applied = 0
     for n in notes:
-        about = overrides.get(n["rel"])
-        if about:
-            n["about"] = about
+        extra = overrides.get(n["rel"])
+        if extra:
+            existing = n.get("editor_note")
+            n["editor_note"] = f"{existing} {extra}" if existing else extra
             applied += 1
     return applied
 
@@ -377,8 +389,10 @@ def load_authorship():
 
 
 def apply_authorship(notes, verdicts):
-    """Drop 'no' notes entirely. Tag mixed/unclear with is_mixed=True so the
-    prompt can warn Opus to distinguish Andrew's prose from embedded quotes."""
+    """Drop 'no' notes entirely. For mixed/unclear, set editor_note to the
+    fixed authorship warning so the prompt can warn Opus to distinguish
+    Andrew's prose from embedded quotes. Manual editor notes from
+    _note_metadata.json are appended later by apply_note_metadata."""
     kept = []
     n_dropped = 0
     n_mixed = 0
@@ -387,8 +401,8 @@ def apply_authorship(notes, verdicts):
         if v == "no":
             n_dropped += 1
             continue
-        n["is_mixed"] = v in ("mixed", "unclear")
-        if n["is_mixed"]:
+        if v in ("mixed", "unclear"):
+            n["editor_note"] = MIXED_AUTHORSHIP_NOTE
             n_mixed += 1
         kept.append(n)
     return kept, n_dropped, n_mixed
@@ -443,13 +457,6 @@ def build_user_msg(era_name, notes, era_brief="", prior_chapters=None):
             lines.append("")
         lines.append("--- END PRIOR CHAPTERS ---")
         lines.append("")
-    if era_brief:
-        lines.extend([
-            "--- ERA BRIEF (authoring brief for this era — factual anchors, threads worth tracking, drafting guidance accumulated from prior runs) ---",
-            era_brief,
-            "--- END ERA BRIEF ---",
-            "",
-        ])
     lo, hi = era_date_range(notes)
     range_str = f" ({lo} – {hi})" if lo else ""
     lines.extend([
@@ -463,13 +470,12 @@ def build_user_msg(era_name, notes, era_brief="", prior_chapters=None):
         title = n.get("title") or "(untitled)"
         date = (n.get("date") or "")[:10]
         label = n["rel"].split("/", 1)[0]
-        mix = "  ⚠ MIXED — contains quoted material not written by Andrew" if n.get("is_mixed") else ""
         date_warn = ""
         if n.get("date_uncertain"):
             date_warn = f"  ⚠ DATE-CLUSTER ({n.get('date_cluster_size')} notes share this date — likely import or last-edit time, not write time)"
-        lines.append(f"=== {date} · {label} · {title}{mix}{date_warn} ===")
-        if n.get("about"):
-            lines.append(f"  ⚠ ABOUT: {n['about']}")
+        lines.append(f"=== {date} · {label} · {title}{date_warn} ===")
+        if n.get("editor_note"):
+            lines.append(f"  {EDITOR_NOTE_PREFIX} {n['editor_note']}")
         lines.append("")
         lines.append(body)
         lines.append("")
@@ -700,7 +706,7 @@ async def main():
     all_notes, n_dropped, n_mixed = apply_authorship(all_notes, verdicts)
     log(f"authorship: dropped {n_dropped} clippings, flagged {n_mixed} mixed notes ({len(verdicts)} verdicts loaded)")
     log(f"date overrides: {n_redated}")
-    n_about = apply_note_about(all_notes)
+    n_about = apply_note_metadata(all_notes)
     if n_about:
         log(f"note-about overrides: {n_about}")
     n_uncertain = flag_date_clusters(all_notes)

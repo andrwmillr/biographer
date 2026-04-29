@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from write_biography import (
     CHAPTER_SYSTEM, CORPUS, ERAS, apply_authorship, apply_date_overrides,
-    apply_note_about, build_user_msg, era_of, era_slug, flag_date_clusters,
+    apply_note_metadata, build_user_msg, era_of, era_slug, flag_date_clusters,
     load_authorship, load_corpus_notes, load_era_brief, load_prior_chapters,
 )
 
@@ -33,7 +33,7 @@ all_notes = load_corpus_notes()
 apply_date_overrides(all_notes)
 verdicts = load_authorship()
 all_notes, _, _ = apply_authorship(all_notes, verdicts)
-apply_note_about(all_notes)
+apply_note_metadata(all_notes)
 flag_date_clusters(all_notes)
 era_brief_map = load_era_brief()
 
