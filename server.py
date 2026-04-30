@@ -13,14 +13,28 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
+import secrets
+import shutil
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+import yaml
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -71,6 +85,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- Multi-tenant corpus session layer ------------------------------------
+# Each browser holds an opaque session value in localStorage and sends it as
+# X-Corpus-Session on every request. The session value IS the corpus slug
+# under _corpora/<slug>/. The legacy single-tenant corpus at _corpus/ is
+# accessed by the special session value LEGACY_SESSION (Andrew's admin
+# session); set it once in DevTools:
+#   localStorage.setItem('corpusSession', '_andrew_legacy')
+
+CORPORA_ROOT = REPO / "_corpora"
+LEGACY_SESSION = "_andrew_legacy"
+
+
+def get_session(x_corpus_session: str | None = Header(None)) -> str:
+    if not x_corpus_session:
+        raise HTTPException(401, "missing X-Corpus-Session header")
+    return x_corpus_session
+
+
+def require_legacy(session: str = Depends(get_session)) -> None:
+    if session != LEGACY_SESSION:
+        raise HTTPException(403, "this endpoint is reserved for the legacy admin session")
+
+
+def corpus_dir(session: str) -> Path:
+    """Resolve a session string to its on-disk corpus directory.
+    Raises 401 for invalid / nonexistent sessions."""
+    if session == LEGACY_SESSION:
+        return REPO / "_corpus"
+    candidate = CORPORA_ROOT / session
+    try:
+        candidate.resolve().relative_to(CORPORA_ROOT.resolve())
+    except (ValueError, RuntimeError):
+        raise HTTPException(401, "invalid session")
+    if not candidate.is_dir():
+        raise HTTPException(401, "session not found (corpus may have been wiped)")
+    return candidate
+
+
+def make_slug() -> str:
+    return f"c_{secrets.token_hex(8)}"
+
 
 def _load_state():
     notes = wb.load_corpus_notes()
@@ -87,7 +142,7 @@ def _load_state():
     return notes, by_era
 
 
-@app.get("/eras")
+@app.get("/eras", dependencies=[Depends(require_legacy)])
 def list_eras():
     _, by_era = _load_state()
     out = []
@@ -121,7 +176,7 @@ def _note_source(rel: str) -> str:
     return ""
 
 
-@app.get("/notes")
+@app.get("/notes", dependencies=[Depends(require_legacy)])
 def list_notes(era: str):
     _, by_era = _load_state()
     if era not in by_era:
@@ -229,7 +284,7 @@ def _prepare_run(era_name: str, include_future: bool = False) -> dict:
     }
 
 
-@app.post("/promote")
+@app.post("/promote", dependencies=[Depends(require_legacy)])
 def promote(req: PromoteRequest):
     run_dir = (REPO / req.run_dir).resolve()
     # Reject paths that escape the biographies dump tree.
@@ -267,7 +322,7 @@ def promote(req: PromoteRequest):
     }
 
 
-@app.post("/draft")
+@app.post("/draft", dependencies=[Depends(require_legacy)])
 async def draft(req: DraftRequest):
     inputs = _prepare_run(req.era, include_future=req.future)
     notes_count = inputs["notes_count"]
@@ -402,7 +457,7 @@ def _build_kickoff(run_dir_abs: Path, user_msg: str) -> str:
 
 
 @app.websocket("/session")
-async def session(ws: WebSocket):
+async def session(ws: WebSocket, session: str | None = None):
     await ws.accept()
     tasks: list[asyncio.Task] = []
     run_dir: Path | None = None
@@ -413,6 +468,16 @@ async def session(ws: WebSocket):
             await ws.send_text(json.dumps(obj))
         except Exception:
             pass
+
+    # Browser WebSockets can't set custom headers, so the session value rides
+    # on the URL: /session?session=<slug>. Drafting is currently legacy-only.
+    if session != LEGACY_SESSION:
+        await send({"type": "error", "message": "drafting is reserved for the legacy admin session"})
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        return
 
     try:
         first = await ws.receive_json()
@@ -632,3 +697,134 @@ async def session(ws: WebSocket):
             await ws.close()
         except Exception:
             pass
+
+
+# ---- Multi-tenant corpus import / wipe ------------------------------------
+
+
+def _validate_eras_yaml(text: str) -> list:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise HTTPException(400, f"invalid yaml: {e}")
+    if not isinstance(data, list):
+        raise HTTPException(400, "eras.yaml must be a YAML list at top level")
+    for i, era in enumerate(data):
+        if not isinstance(era, dict):
+            raise HTTPException(400, f"era #{i + 1} must be a mapping")
+        if "name" not in era:
+            raise HTTPException(400, f"era #{i + 1} missing 'name'")
+        if "start" not in era:
+            raise HTTPException(400, f"era #{i + 1} missing 'start'")
+    return data
+
+
+def _extract_zip_safe(content: bytes, target: Path) -> int:
+    """Extract zip into target, rejecting paths that escape target.
+    Returns count of extracted regular files."""
+    target.mkdir(parents=True, exist_ok=True)
+    target_resolved = target.resolve()
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            members = zf.namelist()
+            for member in members:
+                if not member or member.endswith("/"):
+                    continue
+                mp = Path(member)
+                if mp.is_absolute():
+                    raise HTTPException(400, f"unsafe zip member (absolute): {member}")
+                final = (target / member).resolve()
+                try:
+                    final.relative_to(target_resolved)
+                except ValueError:
+                    raise HTTPException(400, f"unsafe zip member (escapes target): {member}")
+            zf.extractall(target)
+            return sum(1 for m in members if m and not m.endswith("/"))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "not a valid zip file")
+
+
+@app.post("/import/notes")
+async def import_notes(file: UploadFile = File(...)):
+    """Accept a zip of notes, extract into _corpora/<new-slug>/notes/.
+    Returns the freshly-minted slug — caller stores it as their session.
+    No auth required: importing IS how a session is established."""
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "expected a .zip file")
+    try:
+        content = await file.read()
+    finally:
+        await file.close()
+
+    slug = make_slug()
+    target = CORPORA_ROOT / slug / "notes"
+    try:
+        note_count = _extract_zip_safe(content, target)
+    except HTTPException:
+        # Clean up partial extraction.
+        shutil.rmtree(CORPORA_ROOT / slug, ignore_errors=True)
+        raise
+    return {"slug": slug, "note_count": note_count}
+
+
+@app.post("/import/eras")
+async def import_eras(
+    file: UploadFile = File(...),
+    session: str = Depends(get_session),
+):
+    """Accept an eras.yaml for the session's corpus."""
+    if session == LEGACY_SESSION:
+        raise HTTPException(403, "cannot replace the legacy corpus's eras through the app")
+    cdir = corpus_dir(session)
+    try:
+        content = await file.read()
+    finally:
+        await file.close()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "eras.yaml must be utf-8 encoded")
+    data = _validate_eras_yaml(text)
+    cfg_dir = cdir / "_config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "eras.yaml").write_text(text, encoding="utf-8")
+    return {"ok": True, "era_count": len(data)}
+
+
+@app.get("/corpus")
+def get_corpus(session: str = Depends(get_session)):
+    """Return current corpus state for the session — used at page load to
+    decide whether to show import flow, imported view, or legacy app."""
+    cdir = corpus_dir(session)
+    notes_dir = cdir / "notes"
+    note_count = (
+        sum(1 for p in notes_dir.rglob("*") if p.is_file())
+        if notes_dir.exists()
+        else 0
+    )
+    eras_yaml_path = cdir / "_config" / "eras.yaml"
+    has_eras = eras_yaml_path.exists()
+    eras: list = []
+    if has_eras:
+        try:
+            loaded = yaml.safe_load(eras_yaml_path.read_text(encoding="utf-8"))
+            eras = loaded if isinstance(loaded, list) else []
+        except Exception:
+            eras = []
+    return {
+        "slug": session,
+        "is_legacy": session == LEGACY_SESSION,
+        "note_count": note_count,
+        "has_eras": has_eras,
+        "eras": eras,
+    }
+
+
+@app.post("/corpus/wipe")
+def wipe_corpus(session: str = Depends(get_session)):
+    """Hard-delete the session's corpus dir. Legacy is never wipeable here."""
+    if session == LEGACY_SESSION:
+        raise HTTPException(403, "cannot wipe the legacy corpus through the app")
+    cdir = corpus_dir(session)
+    shutil.rmtree(cdir)
+    return {"ok": True}

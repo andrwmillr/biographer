@@ -9,6 +9,29 @@ const WS_BASE = API_BASE
   ? API_BASE.replace(/^http/, "ws")
   : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
+// Multi-tenant session: opaque slug stored in localStorage, sent as
+// X-Corpus-Session header. Drafting against the existing `_corpus/` is
+// reserved for the legacy session "_andrew_legacy" (admin) — set it once in
+// DevTools: localStorage.setItem('corpusSession', '_andrew_legacy').
+const SESSION_KEY = "corpusSession";
+
+function getSession(): string | null {
+  return localStorage.getItem(SESSION_KEY);
+}
+
+function setSession(slug: string): void {
+  localStorage.setItem(SESSION_KEY, slug);
+}
+
+function clearSession(): void {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const s = getSession();
+  return s ? { "X-Corpus-Session": s } : {};
+}
+
 const MD_COMPONENTS = {
   p: (props: any) => <p className="my-2 leading-relaxed" {...props} />,
   ul: (props: any) => <ul className="my-2 list-disc pl-5 space-y-0.5" {...props} />,
@@ -183,6 +206,112 @@ export default function App() {
   const [showTimeline, setShowTimeline] = useState<boolean>(true);
   const [notesOverlay, setNotesOverlay] = useState<boolean>(false);
 
+  // ---- Multi-tenant corpus session ----
+  type CorpusInfo = {
+    slug: string;
+    is_legacy: boolean;
+    note_count: number;
+    has_eras: boolean;
+    eras: Array<{ name: string; start: string; end?: string }>;
+  };
+  const [corpusMode, setCorpusMode] = useState<
+    "loading" | "import-notes" | "import-eras" | "imported" | "legacy" | "error"
+  >("loading");
+  const [corpusInfo, setCorpusInfo] = useState<CorpusInfo | null>(null);
+  const [importError, setImportError] = useState<string>("");
+
+  // Bootstrap: on mount, check session and route to the right mode.
+  useEffect(() => {
+    const slug = getSession();
+    if (!slug) {
+      setCorpusMode("import-notes");
+      return;
+    }
+    fetch(`${API_BASE}/corpus`, { headers: authHeaders() })
+      .then(async (r) => {
+        if (r.status === 401) {
+          clearSession();
+          setCorpusMode("import-notes");
+          return null;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        return (await r.json()) as CorpusInfo;
+      })
+      .then((info) => {
+        if (!info) return;
+        setCorpusInfo(info);
+        if (info.is_legacy) setCorpusMode("legacy");
+        else if (!info.has_eras) setCorpusMode("import-eras");
+        else setCorpusMode("imported");
+      })
+      .catch((err: Error) => {
+        setError(`session check failed: ${err.message}`);
+        setCorpusMode("error");
+      });
+  }, []);
+
+  async function handleNotesUpload(file: File) {
+    setImportError("");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const resp = await fetch(`${API_BASE}/import/notes`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!resp.ok)
+        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const data = await resp.json();
+      setSession(data.slug);
+      setCorpusInfo({
+        slug: data.slug,
+        is_legacy: false,
+        note_count: data.note_count,
+        has_eras: false,
+        eras: [],
+      });
+      setCorpusMode("import-eras");
+    } catch (err) {
+      setImportError(`notes upload failed: ${(err as Error).message}`);
+    }
+  }
+
+  async function handleErasUpload(file: File) {
+    setImportError("");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const resp = await fetch(`${API_BASE}/import/eras`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData,
+      });
+      if (!resp.ok)
+        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const c = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
+      const info = (await c.json()) as CorpusInfo;
+      setCorpusInfo(info);
+      setCorpusMode("imported");
+    } catch (err) {
+      setImportError(`eras upload failed: ${(err as Error).message}`);
+    }
+  }
+
+  async function handleWipe() {
+    setImportError("");
+    try {
+      await fetch(`${API_BASE}/corpus/wipe`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      clearSession();
+      setCorpusInfo(null);
+      setCorpusMode("import-notes");
+    } catch (err) {
+      setImportError(`wipe failed: ${(err as Error).message}`);
+    }
+  }
+
   useEffect(() => {
     if (wsStatus !== "generating") return;
     const id = setInterval(() => {
@@ -192,7 +321,8 @@ export default function App() {
   }, [wsStatus]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/eras`)
+    if (corpusMode !== "legacy") return;
+    fetch(`${API_BASE}/eras`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: Era[]) => {
         setEras(data);
@@ -200,7 +330,7 @@ export default function App() {
         if (firstWithNotes) setSelected(firstWithNotes.name);
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [corpusMode]);
 
   useEffect(() => {
     const el = convLogRef.current;
@@ -213,6 +343,7 @@ export default function App() {
   }, [log, wsStatus]);
 
   useEffect(() => {
+    if (corpusMode !== "legacy") return;
     if (!showNotes || !selected || selected === notesEra) return;
     let cancelled = false;
     (async () => {
@@ -220,7 +351,7 @@ export default function App() {
       setNotes([]);
       setSelectedNote(null);
       try {
-        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
+        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`, { headers: authHeaders() });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data: Note[] = await resp.json();
         if (cancelled) return;
@@ -263,7 +394,7 @@ export default function App() {
     setNotes([]);
     setSelectedNote(null);
     try {
-      const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
+      const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`, { headers: authHeaders() });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: Note[] = await resp.json();
       setNotes(data);
@@ -284,7 +415,7 @@ export default function App() {
       setNotes([]);
       setSelectedNote(null);
       try {
-        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
+        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`, { headers: authHeaders() });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data: Note[] = await resp.json();
         setNotes(data);
@@ -319,7 +450,9 @@ export default function App() {
     wsTurnStartRef.current = Date.now();
     narrationBufRef.current = "";
 
-    const ws = new WebSocket(`${WS_BASE}/session`);
+    const ws = new WebSocket(
+      `${WS_BASE}/session?session=${encodeURIComponent(getSession() || "")}`,
+    );
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -428,7 +561,7 @@ export default function App() {
     try {
       const resp = await fetch(`${API_BASE}/promote`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ era: selected, run_dir: wsRunDir }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
@@ -436,7 +569,7 @@ export default function App() {
       setPromoteResult(data);
       setPromoteState("done");
       // Refresh era list so the ✓ updates.
-      fetch(`${API_BASE}/eras`)
+      fetch(`${API_BASE}/eras`, { headers: authHeaders() })
         .then((r) => r.json())
         .then(setEras)
         .catch(() => {});
@@ -459,8 +592,127 @@ export default function App() {
   const wsActive = wsStatus !== "idle" && wsStatus !== "done" && wsStatus !== "error";
 
   return (
-    <div className="min-h-full relative">
-      <header className="border-b border-stone-200 bg-white">
+    <>
+      {corpusMode === "loading" && (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+          <div className="text-stone-500 text-sm">Loading…</div>
+        </div>
+      )}
+      {corpusMode === "error" && (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+          <div className="max-w-md p-8">
+            <h1 className="font-serif text-xl mb-2">Something went wrong</h1>
+            <p className="text-red-600 text-sm">{error}</p>
+          </div>
+        </div>
+      )}
+      {corpusMode === "import-notes" && (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+          <div className="max-w-md w-full p-8">
+            <h1 className="font-serif text-2xl mb-2">Biographer</h1>
+            <p className="text-stone-600 mb-6 text-sm leading-relaxed">
+              Upload a zip of your notes (e.g. <code className="bg-stone-100 px-1 rounded text-xs">.md</code> or <code className="bg-stone-100 px-1 rounded text-xs">.txt</code> files) to import a corpus. Each browser sees only the corpus it imports. Files live on the host's machine.
+            </p>
+            <label className="block">
+              <span className="text-sm font-medium text-stone-700">Notes (.zip)</span>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleNotesUpload(file);
+                }}
+                className="mt-2 block w-full text-sm text-stone-700"
+              />
+            </label>
+            {importError && (
+              <p className="mt-4 text-red-600 text-sm">{importError}</p>
+            )}
+          </div>
+        </div>
+      )}
+      {corpusMode === "import-eras" && (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+          <div className="max-w-md w-full p-8">
+            <h1 className="font-serif text-2xl mb-2">One more step</h1>
+            <p className="text-stone-600 mb-6 text-sm leading-relaxed">
+              {corpusInfo?.note_count ?? 0} notes uploaded. Now provide an{" "}
+              <code className="bg-stone-100 px-1 rounded text-xs">eras.yaml</code>{" "}
+              defining the era boundaries for this corpus.
+            </p>
+            <label className="block">
+              <span className="text-sm font-medium text-stone-700">eras.yaml</span>
+              <input
+                type="file"
+                accept=".yaml,.yml,application/x-yaml,text/yaml,text/plain"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleErasUpload(file);
+                }}
+                className="mt-2 block w-full text-sm text-stone-700"
+              />
+            </label>
+            {importError && (
+              <p className="mt-4 text-red-600 text-sm">{importError}</p>
+            )}
+            <button
+              onClick={() => {
+                if (window.confirm("Discard the uploaded notes and start over?")) {
+                  handleWipe();
+                }
+              }}
+              className="mt-6 text-xs text-stone-500 hover:text-stone-700 underline"
+            >
+              Cancel and discard
+            </button>
+          </div>
+        </div>
+      )}
+      {corpusMode === "imported" && corpusInfo && (
+        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+          <div className="max-w-md w-full p-8">
+            <h1 className="font-serif text-2xl mb-2">Corpus imported</h1>
+            <p className="text-stone-600 mb-2 text-sm">
+              {corpusInfo.note_count} notes • {corpusInfo.eras.length} eras
+            </p>
+            {corpusInfo.eras.length > 0 && (
+              <ul className="text-sm text-stone-700 mt-4 space-y-1 border-l-2 border-stone-200 pl-3">
+                {corpusInfo.eras.map((era, i) => (
+                  <li key={i} className="flex justify-between gap-4">
+                    <span>{era.name}</span>
+                    <span className="text-stone-500 text-xs tabular-nums">
+                      {era.start}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-stone-600 text-sm mt-6 leading-relaxed">
+              Drafting against imported corpora isn't connected yet — that's the next piece. For now, your corpus is uploaded and ready.
+            </p>
+            <button
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Wipe this corpus? This deletes all uploaded notes and eras from the host.",
+                  )
+                ) {
+                  handleWipe();
+                }
+              }}
+              className="mt-6 text-sm text-red-600 hover:text-red-700"
+            >
+              Wipe corpus
+            </button>
+            {importError && (
+              <p className="mt-4 text-red-600 text-sm">{importError}</p>
+            )}
+          </div>
+        </div>
+      )}
+      {corpusMode === "legacy" && (
+        <div className="min-h-full relative">
+          <header className="border-b border-stone-200 bg-white">
         <div className="mx-auto max-w-5xl px-6 py-4 flex items-center gap-4">
           <h1 className="font-serif text-xl">Biographer</h1>
           <div className="ml-auto flex items-center gap-2">
@@ -1139,6 +1391,8 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+        </div>
+      )}
+    </>
   );
 }
