@@ -217,8 +217,6 @@ def auth_request(req: AuthRequestBody):
         f'<p><a href="{verify_url}" style="display:inline-block;padding:10px 20px;'
         f'background:#44403c;color:#ffffff;text-decoration:none;border-radius:4px;'
         f'font-family:sans-serif;font-size:14px">Sign in to Biographer</a></p>'
-        f'<p style="color:#666;font-size:13px">Or paste this link into your browser:<br>'
-        f'<a href="{verify_url}" style="color:#666">{verify_url}</a></p>'
         f'<p style="color:#999;font-size:12px;margin-top:24px">'
         f'If you didn\'t request this, you can safely ignore this email — '
         f'someone may have typed your address by mistake.</p>'
@@ -363,8 +361,8 @@ def corpus_dir(session: str) -> Path:
         return REPO / "_corpora" / "andrew"
     # Reject session values that could be the host's directory name or that
     # don't match the issued slug shape. Imported corpora use slugs like
-    # "c_<16 hex>" — anything else is an attack or a typo.
-    if not re.fullmatch(r"c_[0-9a-f]{16}", session):
+    # "c_<16 hex>"; "andrew" is the legacy admin slug now ownable by email.
+    if session != "andrew" and not re.fullmatch(r"c_[0-9a-f]{16}", session):
         raise HTTPException(401, "invalid session")
     candidate = CORPORA_ROOT / session
     try:
