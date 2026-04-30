@@ -98,6 +98,10 @@ app.add_middleware(
 CORPORA_ROOT = REPO / "_corpora"
 LEGACY_SESSION = os.environ["LEGACY_SESSION"]
 
+# Upload limits for /import/notes — the only unauthenticated endpoint.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
+MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024   # 500 MB uncompressed (zip-bomb defense)
+
 
 def get_session(x_corpus_session: str | None = Header(None)) -> str:
     if not x_corpus_session:
@@ -1150,13 +1154,22 @@ def _validate_eras_yaml(text: str) -> list:
 
 
 def _extract_zip_safe(content: bytes, target: Path) -> int:
-    """Extract zip into target, rejecting paths that escape target.
+    """Extract zip into target, rejecting paths that escape target and
+    rejecting zip bombs that would extract beyond MAX_UNCOMPRESSED_BYTES.
     Returns count of extracted regular files."""
     target.mkdir(parents=True, exist_ok=True)
     target_resolved = target.resolve()
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            members = zf.namelist()
+            infos = zf.infolist()
+            total_uncompressed = sum(m.file_size for m in infos)
+            if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+                raise HTTPException(
+                    413,
+                    f"zip would extract to {total_uncompressed:,} bytes; "
+                    f"max is {MAX_UNCOMPRESSED_BYTES:,}",
+                )
+            members = [m.filename for m in infos]
             for member in members:
                 if not member or member.endswith("/"):
                     continue
@@ -1221,10 +1234,25 @@ async def import_notes(file: UploadFile = File(...)):
     accumulating orphans on disk."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "expected a .zip file")
+    # Streaming size cap — abort if the upload exceeds MAX_UPLOAD_BYTES
+    # without loading the whole thing into memory first.
+    chunks: list[bytes] = []
+    total = 0
     try:
-        content = await file.read()
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    413,
+                    f"upload exceeds {MAX_UPLOAD_BYTES:,} bytes",
+                )
+            chunks.append(chunk)
     finally:
         await file.close()
+    content = b"".join(chunks)
 
     try:
         content_hash = _zip_content_hash(content)
