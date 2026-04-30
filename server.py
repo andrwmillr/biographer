@@ -1168,6 +1168,21 @@ def _extract_zip_safe(content: bytes, target: Path) -> int:
         raise HTTPException(400, "not a valid zip file")
 
 
+def _zip_content_hash(zip_bytes: bytes) -> str:
+    """sha256 of (sorted relative paths + file bytes) read directly from the
+    zip — stable across re-zips with different metadata or compression."""
+    h = hashlib.sha256()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        members = sorted(m for m in zf.namelist() if not m.endswith("/"))
+        for member in members:
+            h.update(member.encode("utf-8"))
+            h.update(b"\0")
+            with zf.open(member) as f:
+                h.update(f.read())
+            h.update(b"\0\0")
+    return h.hexdigest()
+
+
 def _find_existing_corpus_by_hash(content_hash: str) -> str | None:
     """Scan _corpora/*/_meta.json for an existing corpus with this content
     hash. Returns the slug if found, else None."""
@@ -1205,7 +1220,10 @@ async def import_notes(file: UploadFile = File(...)):
     finally:
         await file.close()
 
-    content_hash = hashlib.sha256(content).hexdigest()
+    try:
+        content_hash = _zip_content_hash(content)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "not a valid zip file")
     existing_slug = _find_existing_corpus_by_hash(content_hash)
     if existing_slug:
         notes_dir = CORPORA_ROOT / existing_slug / "notes"
