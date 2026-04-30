@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ImportFlow, type CorpusInfo } from "./ImportFlow";
 
 // Backend URL resolution: ?backend=... query param > VITE_BACKEND_URL build env > same-origin (vite dev proxy).
 const _backendOverride = new URLSearchParams(location.search).get("backend") ?? undefined;
@@ -17,10 +18,6 @@ const SESSION_KEY = "corpusSession";
 
 function getSession(): string | null {
   return localStorage.getItem(SESSION_KEY);
-}
-
-function setSession(slug: string): void {
-  localStorage.setItem(SESSION_KEY, slug);
 }
 
 function clearSession(): void {
@@ -238,32 +235,27 @@ export default function App() {
   const [showTimeline, setShowTimeline] = useState<boolean>(true);
   const [notesOverlay, setNotesOverlay] = useState<boolean>(false);
 
-  // ---- Multi-tenant corpus session ----
-  type CorpusInfo = {
-    slug: string;
-    is_legacy: boolean;
-    note_count: number;
-    has_eras: boolean;
-    eras: Array<{ name: string; start: string; end?: string }>;
-  };
+  // ---- Multi-tenant corpus session (top-level routing) ----
+  // The import flow itself lives in <ImportFlow>; App owns just enough state
+  // to route between loading / import / ready / error and to handle the
+  // wipe-from-ready case (header button).
   const [corpusMode, setCorpusMode] = useState<
-    "loading" | "import-notes" | "import-eras" | "ready" | "error"
+    "loading" | "import" | "ready" | "error"
   >("loading");
   const [corpusInfo, setCorpusInfo] = useState<CorpusInfo | null>(null);
-  const [importError, setImportError] = useState<string>("");
 
   // Bootstrap: on mount, check session and route to the right mode.
   useEffect(() => {
     const slug = getSession();
     if (!slug) {
-      setCorpusMode("import-notes");
+      setCorpusMode("import");
       return;
     }
     fetch(`${API_BASE}/corpus`, { headers: authHeaders() })
       .then(async (r) => {
         if (r.status === 401) {
           clearSession();
-          setCorpusMode("import-notes");
+          setCorpusMode("import");
           return null;
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
@@ -272,8 +264,7 @@ export default function App() {
       .then((info) => {
         if (!info) return;
         setCorpusInfo(info);
-        if (!info.has_eras) setCorpusMode("import-eras");
-        else setCorpusMode("ready");
+        setCorpusMode(info.has_eras ? "ready" : "import");
       })
       .catch((err: Error) => {
         setError(`session check failed: ${err.message}`);
@@ -281,72 +272,19 @@ export default function App() {
       });
   }, []);
 
-  async function handleNotesUpload(file: File) {
-    setImportError("");
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const resp = await fetch(`${API_BASE}/import/notes`, {
-        method: "POST",
-        body: formData,
-      });
-      if (!resp.ok)
-        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-      const data = await resp.json();
-      setSession(data.slug);
-      // Re-fetch corpus state — if this was a dedup match against an existing
-      // corpus that already has eras, route directly to "ready" instead of
-      // forcing the user to re-upload yaml.
-      const c = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
-      const info = (await c.json()) as CorpusInfo;
-      setCorpusInfo(info);
-      setCorpusMode(info.has_eras ? "ready" : "import-eras");
-      if (data.duplicate) {
-        setImportError(
-          info.has_eras
-            ? "Welcome back — found your existing corpus with this content."
-            : "Welcome back — found your existing corpus. Continue with eras.",
-        );
-      }
-    } catch (err) {
-      setImportError(`notes upload failed: ${(err as Error).message}`);
-    }
-  }
-
-  async function handleErasUpload(file: File) {
-    setImportError("");
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const resp = await fetch(`${API_BASE}/import/eras`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: formData,
-      });
-      if (!resp.ok)
-        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-      const c = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
-      const info = (await c.json()) as CorpusInfo;
-      setCorpusInfo(info);
-      setCorpusMode("ready");
-    } catch (err) {
-      setImportError(`eras upload failed: ${(err as Error).message}`);
-    }
-  }
-
   async function handleWipe() {
-    setImportError("");
     try {
       await fetch(`${API_BASE}/corpus/wipe`, {
         method: "POST",
         headers: authHeaders(),
       });
-      clearSession();
-      setCorpusInfo(null);
-      setCorpusMode("import-notes");
     } catch (err) {
-      setImportError(`wipe failed: ${(err as Error).message}`);
+      setError(`wipe failed: ${(err as Error).message}`);
+      return;
     }
+    clearSession();
+    setCorpusInfo(null);
+    setCorpusMode("import");
   }
 
   useEffect(() => {
@@ -817,67 +755,17 @@ export default function App() {
           </div>
         </div>
       )}
-      {corpusMode === "import-notes" && (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50">
-          <div className="max-w-md w-full p-8">
-            <h1 className="font-serif text-2xl mb-2">Biographer</h1>
-            <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-              Upload a zip of your notes (e.g. <code className="bg-stone-100 px-1 rounded text-xs">.md</code> or <code className="bg-stone-100 px-1 rounded text-xs">.txt</code> files) to import a corpus. Each browser sees only the corpus it imports. Files live on the host's machine.
-            </p>
-            <label className="block">
-              <span className="text-sm font-medium text-stone-700">Notes (.zip)</span>
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleNotesUpload(file);
-                }}
-                className="mt-2 block w-full text-sm text-stone-700"
-              />
-            </label>
-            {importError && (
-              <p className="mt-4 text-red-600 text-sm">{importError}</p>
-            )}
-          </div>
-        </div>
-      )}
-      {corpusMode === "import-eras" && (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50">
-          <div className="max-w-md w-full p-8">
-            <h1 className="font-serif text-2xl mb-2">One more step</h1>
-            <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-              {corpusInfo?.note_count ?? 0} notes uploaded. Now provide an{" "}
-              <code className="bg-stone-100 px-1 rounded text-xs">eras.yaml</code>{" "}
-              defining the era boundaries for this corpus.
-            </p>
-            <label className="block">
-              <span className="text-sm font-medium text-stone-700">eras.yaml</span>
-              <input
-                type="file"
-                accept=".yaml,.yml,application/x-yaml,text/yaml,text/plain"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleErasUpload(file);
-                }}
-                className="mt-2 block w-full text-sm text-stone-700"
-              />
-            </label>
-            {importError && (
-              <p className="mt-4 text-red-600 text-sm">{importError}</p>
-            )}
-            <button
-              onClick={() => {
-                if (window.confirm("Discard the uploaded notes and start over?")) {
-                  handleWipe();
-                }
-              }}
-              className="mt-6 text-xs text-stone-500 hover:text-stone-700 underline"
-            >
-              Cancel and discard
-            </button>
-          </div>
-        </div>
+      {corpusMode === "import" && (
+        <ImportFlow
+          key={corpusInfo?.slug ?? "fresh"}
+          apiBase={API_BASE}
+          initialInfo={corpusInfo}
+          onComplete={(info) => {
+            setCorpusInfo(info);
+            setCorpusMode("ready");
+          }}
+          onWipe={handleWipe}
+        />
       )}
       {corpusMode === "ready" && (
         <div className="min-h-full relative">
