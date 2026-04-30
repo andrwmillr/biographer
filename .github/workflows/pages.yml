@@ -1,0 +1,55 @@
+name: Deploy frontend to Pages
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      - run: npm run build
+        working-directory: frontend
+        env:
+          # Optional: set as a repo secret if you want a default backend URL
+          # baked into the bundle. Leave unset to require ?backend=... at runtime.
+          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL }}
+          # For project Pages (<user>.github.io/<repo>/). Set the secret/var
+          # BASE_PATH=/ if you use user-Pages or a custom domain.
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -58,9 +58,15 @@ from claude_agent_sdk import (  # noqa: E402
 from claude_agent_sdk.types import StreamEvent  # noqa: E402
 
 app = FastAPI()
+
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "ALLOWED_ORIGINS", "http://localhost:5173"
+    ).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -78,13 +84,12 @@ def _load_state():
         e = wb.era_of(n.get("date", ""))
         if e in by_era:
             by_era[e].append(n)
-    briefs = wb.load_era_brief()
-    return notes, by_era, briefs
+    return notes, by_era
 
 
 @app.get("/eras")
 def list_eras():
-    _, by_era, _ = _load_state()
+    _, by_era = _load_state()
     out = []
     for name, start, end in wb.ERAS:
         chapter_path = wb.CHAPTERS_DIR / f"{wb.era_slug(name)}.md"
@@ -118,7 +123,7 @@ def _note_source(rel: str) -> str:
 
 @app.get("/notes")
 def list_notes(era: str):
-    _, by_era, _ = _load_state()
+    _, by_era = _load_state()
     if era not in by_era:
         raise HTTPException(404, f"unknown era: {era}")
     notes = sorted(by_era[era], key=lambda n: n.get("date", ""))
@@ -142,6 +147,7 @@ def list_notes(era: str):
 
 class DraftRequest(BaseModel):
     era: str
+    future: bool = False
 
 
 class PromoteRequest(BaseModel):
@@ -149,10 +155,11 @@ class PromoteRequest(BaseModel):
     run_dir: str  # repo-relative run dir, e.g. _corpus/.../runs/2026-04-27T...
 
 
-def _prepare_run(era_name: str) -> dict:
+def _prepare_run(era_name: str, include_future: bool = False) -> dict:
     """Build the prompt inputs and create a fresh run dir on disk.
-    Returns {run_dir, run_rel, full_user_msg, notes_count, prior_count, in_chars}."""
-    _, by_era, briefs = _load_state()
+    Returns {run_dir, run_rel, full_user_msg, notes_count, prior_count,
+    digest_count, future_count, future_digest_count, in_chars}."""
+    _, by_era = _load_state()
     if era_name not in by_era:
         raise HTTPException(404, f"unknown era: {era_name}")
     notes = by_era[era_name]
@@ -160,7 +167,16 @@ def _prepare_run(era_name: str) -> dict:
         raise HTTPException(400, f"era has no notes: {era_name}")
     prior = wb.load_prior_chapters(era_name)
     prior_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in prior]
-    era_msg = wb.build_user_msg(era_name, notes, era_brief=briefs.get(era_name, ""))
+    prior_digests = wb.load_prior_thread_digests(era_name)
+    digest_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{d}" for n, d in prior_digests]
+    future_blocks = []
+    future_digest_blocks = []
+    if include_future:
+        future = wb.load_future_chapters(era_name)
+        future_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in future]
+        future_d = wb.load_future_thread_digests(era_name)
+        future_digest_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{d}" for n, d in future_d]
+    era_msg = wb.build_user_msg(era_name, notes)
 
     parts = []
     if prior_blocks:
@@ -170,6 +186,27 @@ def _prepare_run(era_name: str) -> dict:
         for ch in prior_blocks:
             parts.append(ch + "\n\n")
         parts.append("--- END PRIOR CHAPTERS ---\n\n")
+    if digest_blocks:
+        parts.append(
+            "--- PRIOR THREAD DIGESTS (structured per-era state — read alongside the prior chapters) ---\n\n"
+        )
+        for d in digest_blocks:
+            parts.append(d + "\n\n")
+        parts.append("--- END PRIOR THREAD DIGESTS ---\n\n")
+    if future_blocks:
+        parts.append(
+            "--- FUTURE CHAPTERS (later eras, drafted in a previous run — for thematic alignment, NOT for events that haven't happened yet in this era; do not foreshadow or anticipate) ---\n\n"
+        )
+        for ch in future_blocks:
+            parts.append(ch + "\n\n")
+        parts.append("--- END FUTURE CHAPTERS ---\n\n")
+    if future_digest_blocks:
+        parts.append(
+            "--- FUTURE THREAD DIGESTS (later eras' digests — same caveat: hindsight context, not events to anticipate) ---\n\n"
+        )
+        for d in future_digest_blocks:
+            parts.append(d + "\n\n")
+        parts.append("--- END FUTURE THREAD DIGESTS ---\n\n")
     parts.append(era_msg)
     full_user_msg = "".join(parts)
 
@@ -185,6 +222,9 @@ def _prepare_run(era_name: str) -> dict:
         "full_user_msg": full_user_msg,
         "notes_count": len(notes),
         "prior_count": len(prior_blocks),
+        "digest_count": len(digest_blocks),
+        "future_count": len(future_blocks),
+        "future_digest_count": len(future_digest_blocks),
         "in_chars": len(full_user_msg),
     }
 
@@ -229,40 +269,14 @@ def promote(req: PromoteRequest):
 
 @app.post("/draft")
 async def draft(req: DraftRequest):
-    _, by_era, briefs = _load_state()
-    if req.era not in by_era:
-        raise HTTPException(404, f"unknown era: {req.era}")
-    notes = by_era[req.era]
-    if not notes:
-        raise HTTPException(400, f"era has no notes: {req.era}")
-    prior = wb.load_prior_chapters(req.era)
-    prior_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in prior]
-    era_msg = wb.build_user_msg(req.era, notes, era_brief=briefs.get(req.era, ""))
-
-    user_blocks = []
-    if prior_blocks:
-        user_blocks.append({
-            "type": "text",
-            "text": "--- PRIOR CHAPTERS (earlier eras in this retrospective — for continuity only; do not rewrite or repeat) ---\n\n",
-        })
-        for i, ch in enumerate(prior_blocks):
-            block = {"type": "text", "text": ch + "\n\n"}
-            if i == len(prior_blocks) - 1:
-                block["cache_control"] = {"type": "ephemeral"}
-            user_blocks.append(block)
-        user_blocks.append({"type": "text", "text": "--- END PRIOR CHAPTERS ---\n\n"})
-    user_blocks.append({"type": "text", "text": era_msg})
-
-    full_user_msg = "".join(b["text"] for b in user_blocks)
-    in_chars = len(full_user_msg)
-
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
-    slug = wb.era_slug(req.era)
-    run_dir = wb.BIOGRAPHIES_DIR / "_dump" / slug / "runs" / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "system.md").write_text(wb.CHAPTER_SYSTEM, encoding="utf-8")
-    (run_dir / "user.md").write_text(full_user_msg, encoding="utf-8")
-    run_rel = str(run_dir.relative_to(REPO))
+    inputs = _prepare_run(req.era, include_future=req.future)
+    notes_count = inputs["notes_count"]
+    prior_count = inputs["prior_count"]
+    future_count = inputs["future_count"]
+    full_user_msg = inputs["full_user_msg"]
+    in_chars = inputs["in_chars"]
+    run_dir = inputs["run_dir"]
+    run_rel = inputs["run_rel"]
 
     async def gen():
         def sse(obj):
@@ -271,8 +285,9 @@ async def draft(req: DraftRequest):
         yield sse({
             "type": "start",
             "era": req.era,
-            "notes": len(notes),
-            "prior_chapters": len(prior_blocks),
+            "notes": notes_count,
+            "prior_chapters": prior_count,
+            "future_chapters": future_count,
             "input_chars": in_chars,
             "model": wb.MODEL,
             "run_dir": run_rel,
@@ -406,10 +421,15 @@ async def session(ws: WebSocket):
             return
 
         try:
-            inputs = _prepare_run(first["era"])
+            inputs = _prepare_run(first["era"], include_future=bool(first.get("future")))
         except HTTPException as e:
             await send({"type": "error", "message": e.detail})
             return
+
+        # Resolve the per-session model: client sends a friendly key like
+        # "opus-4.7"; fall back to the default if absent or unrecognized.
+        model_key = first.get("model")
+        model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
         run_dir = inputs["run_dir"]
         run_dir_abs = run_dir.resolve()
@@ -437,10 +457,13 @@ async def session(ws: WebSocket):
         await send({
             "type": "spawned",
             "era": first["era"],
-            "model": wb.MODEL,
+            "model": model,
             "run_dir": inputs["run_rel"],
             "notes": inputs["notes_count"],
             "prior_chapters": inputs["prior_count"],
+            "prior_digests": inputs["digest_count"],
+            "future_chapters": inputs["future_count"],
+            "future_digests": inputs["future_digest_count"],
             "input_chars": inputs["in_chars"],
         })
 
@@ -449,6 +472,7 @@ async def session(ws: WebSocket):
             paths = {
                 "output": run_dir / "output.md",
                 "thinking": run_dir / "thinking.md",
+                "threads": run_dir / "threads.md",
             }
             mtimes: dict[str, float] = {}
             while True:
@@ -486,7 +510,7 @@ async def session(ws: WebSocket):
         # use the user's Claude Code subscription, not bill the API account.
         sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
         options = ClaudeAgentOptions(
-            model=wb.MODEL,
+            model=model,
             system_prompt=wb.CHAPTER_SYSTEM,
             permission_mode="acceptEdits",
             allowed_tools=["Read", "Edit", "Write", "TodoWrite"],

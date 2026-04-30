@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+// Backend URL resolution: ?backend=... query param > VITE_BACKEND_URL build env > same-origin (vite dev proxy).
+const _backendOverride = new URLSearchParams(location.search).get("backend") ?? undefined;
+const API_BASE = _backendOverride ?? import.meta.env.VITE_BACKEND_URL ?? "";
+const WS_BASE = API_BASE
+  ? API_BASE.replace(/^http/, "ws")
+  : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+
 const MD_COMPONENTS = {
   p: (props: any) => <p className="my-2 leading-relaxed" {...props} />,
   ul: (props: any) => <ul className="my-2 list-disc pl-5 space-y-0.5" {...props} />,
@@ -133,6 +140,8 @@ type LogItem =
 export default function App() {
   const [eras, setEras] = useState<Era[]>([]);
   const [selected, setSelected] = useState<string>("");
+  const [useFuture, setUseFuture] = useState<boolean>(false);
+  const [model, setModel] = useState<string>("opus-4.7");
   const [error, setError] = useState<string>("");
 
   const [log, setLog] = useState<LogItem[]>([]);
@@ -145,6 +154,7 @@ export default function App() {
   const [wsCost, setWsCost] = useState<number>(0);
   const [wsNotes, setWsNotes] = useState<number>(0);
   const [wsPrior, setWsPrior] = useState<number>(0);
+  const [wsFuture, setWsFuture] = useState<number>(0);
   const [wsInputChars, setWsInputChars] = useState<number>(0);
   const [promoteState, setPromoteState] = useState<
     "idle" | "promoting" | "done" | "error"
@@ -182,7 +192,7 @@ export default function App() {
   }, [wsStatus]);
 
   useEffect(() => {
-    fetch("/eras")
+    fetch(`${API_BASE}/eras`)
       .then((r) => r.json())
       .then((data: Era[]) => {
         setEras(data);
@@ -195,8 +205,9 @@ export default function App() {
   useEffect(() => {
     const el = convLogRef.current;
     if (!el) return;
+    const lastItem = log[log.length - 1];
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom < 120) {
+    if (lastItem?.kind === "user" || distanceFromBottom < 120) {
       el.scrollTop = el.scrollHeight;
     }
   }, [log, wsStatus]);
@@ -209,7 +220,7 @@ export default function App() {
       setNotes([]);
       setSelectedNote(null);
       try {
-        const resp = await fetch(`/notes?era=${encodeURIComponent(selected)}`);
+        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data: Note[] = await resp.json();
         if (cancelled) return;
@@ -252,7 +263,7 @@ export default function App() {
     setNotes([]);
     setSelectedNote(null);
     try {
-      const resp = await fetch(`/notes?era=${encodeURIComponent(selected)}`);
+      const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: Note[] = await resp.json();
       setNotes(data);
@@ -273,7 +284,7 @@ export default function App() {
       setNotes([]);
       setSelectedNote(null);
       try {
-        const resp = await fetch(`/notes?era=${encodeURIComponent(selected)}`);
+        const resp = await fetch(`${API_BASE}/notes?era=${encodeURIComponent(selected)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data: Note[] = await resp.json();
         setNotes(data);
@@ -308,12 +319,13 @@ export default function App() {
     wsTurnStartRef.current = Date.now();
     narrationBufRef.current = "";
 
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/session`);
+    const ws = new WebSocket(`${WS_BASE}/session`);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "start", era: selected }));
+      ws.send(
+        JSON.stringify({ type: "start", era: selected, future: useFuture, model }),
+      );
     };
     ws.onmessage = (ev) => {
       let payload: any;
@@ -327,6 +339,7 @@ export default function App() {
         setWsRunDir(payload.run_dir);
         setWsNotes(payload.notes ?? 0);
         setWsPrior(payload.prior_chapters ?? 0);
+        setWsFuture(payload.future_chapters ?? 0);
         setWsInputChars(payload.input_chars ?? 0);
       } else if (t === "narration") {
         narrationBufRef.current += payload.text;
@@ -413,7 +426,7 @@ export default function App() {
     }
     setPromoteState("promoting");
     try {
-      const resp = await fetch("/promote", {
+      const resp = await fetch(`${API_BASE}/promote`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ era: selected, run_dir: wsRunDir }),
@@ -423,7 +436,7 @@ export default function App() {
       setPromoteResult(data);
       setPromoteState("done");
       // Refresh era list so the ✓ updates.
-      fetch("/eras")
+      fetch(`${API_BASE}/eras`)
         .then((r) => r.json())
         .then(setEras)
         .catch(() => {});
@@ -464,6 +477,33 @@ export default function App() {
                 </option>
               ))}
             </select>
+            <select
+              className="rounded border border-stone-300 bg-white px-2 py-1 text-sm"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={wsActive}
+              title="Model used for this session"
+            >
+              <option value="opus-4.7">opus-4.7</option>
+              <option value="opus-4.6">opus-4.6</option>
+              <option value="sonnet-4.6">sonnet-4.6</option>
+            </select>
+            <label
+              className={
+                "flex items-center gap-1 text-xs " +
+                (wsActive ? "text-stone-400" : "text-stone-600 cursor-pointer")
+              }
+              title="Also feed any later eras' chapters & digests already on disk into this draft (hindsight context)."
+            >
+              <input
+                type="checkbox"
+                checked={useFuture}
+                onChange={(e) => setUseFuture(e.target.checked)}
+                disabled={wsActive}
+                className="accent-stone-700"
+              />
+              future
+            </label>
             {wsActive ? (
               <button
                 className="rounded bg-stone-800 px-3 py-1 text-sm text-white hover:bg-stone-700"
@@ -535,8 +575,13 @@ export default function App() {
                       components={{
                         ...CHAPTER_MD_COMPONENTS,
                         a: ({ href, children, ...props }: any) => {
+                          let dateKey = "";
                           if (href?.startsWith("#cite-")) {
-                            const dateKey = href.slice(6);
+                            dateKey = href.slice(6);
+                          } else if (href && /^\d{4}-\d{2}-\d{2}$/.test(href)) {
+                            dateKey = href;
+                          }
+                          if (dateKey) {
                             return (
                               <a
                                 href={href}
@@ -563,7 +608,7 @@ export default function App() {
                       }}
                     >
                       {output.replace(
-                        /\[(\d{4}-\d{2}-\d{2})\]/g,
+                        /(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g,
                         "[\\[$1\\]](#cite-$1)",
                       )}
                     </ReactMarkdown>
@@ -593,8 +638,16 @@ export default function App() {
                           components={{
                             ...MD_COMPONENTS,
                             a: ({ href, children, ...props }: any) => {
+                              let dateKey = "";
                               if (href?.startsWith("#cite-")) {
-                                const dateKey = href.slice(6);
+                                dateKey = href.slice(6);
+                              } else if (
+                                href &&
+                                /^\d{4}-\d{2}-\d{2}$/.test(href)
+                              ) {
+                                dateKey = href;
+                              }
+                              if (dateKey) {
                                 return (
                                   <a
                                     href={href}
@@ -617,8 +670,8 @@ export default function App() {
                           }}
                         >
                           {it.text.replace(
-                            /\[(\d{4}-\d{2}-\d{2})\]/g,
-                            "[$1](#cite-$1)",
+                            /(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g,
+                            "[\\[$1\\]](#cite-$1)",
                           )}
                         </ReactMarkdown>
                       </div>
@@ -675,6 +728,9 @@ export default function App() {
                             {wsPrior > 0
                               ? ` + ${wsPrior} prior chapter${wsPrior === 1 ? "" : "s"}`
                               : ""}
+                            {wsFuture > 0
+                              ? ` + ${wsFuture} future chapter${wsFuture === 1 ? "" : "s"}`
+                              : ""}
                             {totalTok > 0 && (
                               <span className="text-stone-400">
                                 {" "}
@@ -718,10 +774,10 @@ export default function App() {
                     <span className="text-stone-400">no session</span>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="relative">
                 <textarea
                   className={
-                    "flex-1 rounded border px-3 py-2 text-sm font-sans disabled:text-stone-400 transition-colors " +
+                    "block w-full resize-none rounded border px-3 pt-2 pb-11 text-sm font-sans disabled:text-stone-400 transition-colors " +
                     (wsStatus === "awaiting_reply"
                       ? "border-emerald-400 bg-white"
                       : wsStatus === "generating"
@@ -749,11 +805,23 @@ export default function App() {
                   }}
                 />
                 <button
-                  className="self-end rounded bg-stone-900 px-3 py-2 text-sm text-white hover:bg-stone-700 disabled:opacity-40"
+                  className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-40"
                   onClick={sendReply}
                   disabled={wsStatus !== "awaiting_reply" || !reply.trim()}
+                  aria-label="Send"
                 >
-                  Send
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                  >
+                    <path d="M9 14l-4-4 4-4" />
+                    <path d="M5 10h11a4 4 0 0 1 4 4v2" />
+                  </svg>
                 </button>
                 </div>
               </div>
