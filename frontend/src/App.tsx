@@ -32,6 +32,19 @@ function authHeaders(): Record<string, string> {
   return s ? { "X-Corpus-Session": s } : {};
 }
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function formatEraStart(start: string): string {
+  const m = /^(\d{4})-(\d{1,2})/.exec(start);
+  if (!m) return start;
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12) return start;
+  return `${MONTH_NAMES[month - 1]} ${m[1]}`;
+}
+
 const MD_COMPONENTS = {
   p: (props: any) => <p className="my-2 leading-relaxed" {...props} />,
   ul: (props: any) => <ul className="my-2 list-disc pl-5 space-y-0.5" {...props} />,
@@ -681,7 +694,7 @@ export default function App() {
                   <li key={i} className="flex justify-between gap-4">
                     <span>{era.name}</span>
                     <span className="text-stone-500 text-xs tabular-nums">
-                      {era.start}
+                      {formatEraStart(era.start)}
                     </span>
                   </li>
                 ))}
