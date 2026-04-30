@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { authHeaders, setSession } from "./auth";
 
 export type CorpusInfo = {
   slug: string;
@@ -7,17 +8,6 @@ export type CorpusInfo = {
   has_eras: boolean;
   eras: Array<{ name: string; start: string; end?: string }>;
 };
-
-const SESSION_KEY = "corpusSession";
-
-function setSession(slug: string): void {
-  localStorage.setItem(SESSION_KEY, slug);
-}
-
-function authHeaders(): Record<string, string> {
-  const s = localStorage.getItem(SESSION_KEY);
-  return s ? { "X-Corpus-Session": s } : {};
-}
 
 type ImportFlowProps = {
   apiBase: string;
@@ -51,6 +41,7 @@ export function ImportFlow({
     try {
       const resp = await fetch(`${apiBase}/import/notes`, {
         method: "POST",
+        headers: authHeaders(),
         body: formData,
       });
       if (!resp.ok)

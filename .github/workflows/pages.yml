@@ -38,12 +38,8 @@ jobs:
       - run: npm run build
         working-directory: frontend
         env:
-          # Optional: set as a repo secret if you want a default backend URL
-          # baked into the bundle. Leave unset to require ?backend=... at runtime.
-          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL }}
-          # For project Pages (<user>.github.io/<repo>/). Set the secret/var
-          # BASE_PATH=/ if you use user-Pages or a custom domain.
-          BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_BACKEND_URL: https://api.biographeronline.com
+          BASE_PATH: /
 
       - uses: actions/configure-pages@v5
 

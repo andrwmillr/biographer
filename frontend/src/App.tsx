@@ -215,7 +215,9 @@ export default function App() {
             {loginSent ? (
               <>
                 <p className="text-stone-600 mb-4 text-sm leading-relaxed">
-                  Check your email for a sign-in link. Click it to come back here.
+                  Check your email for a sign-in link — including your spam
+                  folder, since this domain is brand new. Click the link to
+                  come back here.
                 </p>
                 <button
                   onClick={() => {

@@ -21,9 +21,12 @@ import re
 import secrets
 import shutil
 import sys
+import urllib.error
+import urllib.request
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import (
@@ -37,7 +40,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 REPO = Path(__file__).resolve().parent.parent
@@ -86,6 +89,227 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- Magic-link auth layer ------------------------------------------------
+# Auth tokens identify a user (email); X-Corpus-Session continues to identify
+# which corpus to operate on. An email can own multiple corpora. State is
+# persisted to _auth/state.json (single file, atomic write-replace).
+
+AUTH_DIR = REPO / "_auth"
+AUTH_STATE_PATH = AUTH_DIR / "state.json"
+MAGIC_TOKEN_TTL = 60 * 15            # 15 minutes
+AUTH_TOKEN_TTL = 60 * 60 * 24 * 90   # 90 days
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+
+def _now_ts() -> int:
+    return int(datetime.now().timestamp())
+
+
+def _empty_auth_state() -> dict:
+    return {"users": {}, "sessions": {}, "pending": {}}
+
+
+def _load_auth() -> dict:
+    if not AUTH_STATE_PATH.exists():
+        return _empty_auth_state()
+    try:
+        return json.loads(AUTH_STATE_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return _empty_auth_state()
+
+
+def _save_auth(state: dict) -> None:
+    AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = AUTH_STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(AUTH_STATE_PATH)
+
+
+def _gc_auth(state: dict) -> dict:
+    now = _now_ts()
+    state["pending"] = {
+        t: r for t, r in state["pending"].items()
+        if r.get("expires", 0) > now
+    }
+    state["sessions"] = {
+        t: r for t, r in state["sessions"].items()
+        if r.get("expires", 0) > now
+    }
+    return state
+
+
+def _send_email(to: str, subject: str, html: str, text: str | None = None) -> None:
+    provider = os.environ.get("EMAIL_PROVIDER") or (
+        "resend" if os.environ.get("RESEND_API_KEY") else "console"
+    )
+    if provider == "console":
+        print(f"\n--- EMAIL (console) ---", file=sys.stderr)
+        print(f"to: {to}", file=sys.stderr)
+        print(f"subject: {subject}", file=sys.stderr)
+        print(html, file=sys.stderr)
+        print("--- END EMAIL ---\n", file=sys.stderr)
+        return
+    if provider == "resend":
+        api_key = os.environ.get("RESEND_API_KEY")
+        if not api_key:
+            raise HTTPException(500, "RESEND_API_KEY not configured")
+        sender = os.environ.get("EMAIL_FROM") or "onboarding@resend.dev"
+        payload = {
+            "from": sender,
+            "to": [to],
+            "subject": subject,
+            "html": html,
+        }
+        if text:
+            payload["text"] = text
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "biographer/0.1",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status >= 400:
+                    raise HTTPException(502, f"resend error: HTTP {resp.status}")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise HTTPException(502, f"resend error: {e.code} {detail}")
+        except urllib.error.URLError as e:
+            raise HTTPException(502, f"resend network error: {e}")
+        return
+    raise HTTPException(500, f"unknown EMAIL_PROVIDER: {provider}")
+
+
+class AuthRequestBody(BaseModel):
+    email: str
+    return_url: str
+
+
+@app.post("/auth/request", status_code=204)
+def auth_request(req: AuthRequestBody):
+    email = req.email.strip().lower()
+    if not EMAIL_RE.fullmatch(email):
+        raise HTTPException(400, "invalid email")
+    parsed = urlparse(req.return_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin not in ALLOWED_ORIGINS:
+        raise HTTPException(400, "return_url origin not allowed")
+
+    state = _gc_auth(_load_auth())
+    magic = secrets.token_urlsafe(32)
+    state["pending"][magic] = {
+        "email": email,
+        "return_url": req.return_url,
+        "expires": _now_ts() + MAGIC_TOKEN_TTL,
+    }
+    _save_auth(state)
+
+    backend_base = os.environ.get("BACKEND_URL") or "http://localhost:8000"
+    verify_url = f"{backend_base}/auth/verify?token={magic}"
+    html = (
+        f'<p>Hi,</p>'
+        f'<p>Use the link below to sign in to Biographer. It expires in 15 minutes.</p>'
+        f'<p><a href="{verify_url}" style="display:inline-block;padding:10px 20px;'
+        f'background:#44403c;color:#ffffff;text-decoration:none;border-radius:4px;'
+        f'font-family:sans-serif;font-size:14px">Sign in to Biographer</a></p>'
+        f'<p style="color:#666;font-size:13px">Or paste this link into your browser:<br>'
+        f'<a href="{verify_url}" style="color:#666">{verify_url}</a></p>'
+        f'<p style="color:#999;font-size:12px;margin-top:24px">'
+        f'If you didn\'t request this, you can safely ignore this email — '
+        f'someone may have typed your address by mistake.</p>'
+        f'<p style="color:#999;font-size:12px">— Biographer</p>'
+    )
+    text = (
+        f"Hi,\n\n"
+        f"Use the link below to sign in to Biographer. It expires in 15 minutes.\n\n"
+        f"{verify_url}\n\n"
+        f"If you didn't request this, you can safely ignore this email — "
+        f"someone may have typed your address by mistake.\n\n"
+        f"— Biographer"
+    )
+    _send_email(
+        to=email,
+        subject="Sign in to Biographer",
+        html=html,
+        text=text,
+    )
+
+
+@app.get("/auth/verify")
+def auth_verify(token: str):
+    state = _gc_auth(_load_auth())
+    record = state["pending"].pop(token, None)
+    if not record:
+        raise HTTPException(400, "invalid or expired token")
+    email = record["email"]
+    return_url = record["return_url"]
+    auth_token = secrets.token_urlsafe(32)
+    state["sessions"][auth_token] = {
+        "email": email,
+        "expires": _now_ts() + AUTH_TOKEN_TTL,
+    }
+    state["users"].setdefault(email, [])
+    _save_auth(state)
+    return RedirectResponse(f"{return_url}#auth={auth_token}", status_code=302)
+
+
+def get_auth(x_auth_token: str | None = Header(None)) -> str:
+    if not x_auth_token:
+        raise HTTPException(401, "missing X-Auth-Token header")
+    state = _gc_auth(_load_auth())
+    record = state["sessions"].get(x_auth_token)
+    if not record:
+        raise HTTPException(401, "invalid or expired auth token")
+    return record["email"]
+
+
+def get_auth_optional(x_auth_token: str | None = Header(None)) -> str | None:
+    """Like get_auth, but returns None for missing/invalid tokens instead of
+    raising. Used by require_corpus_access so the legacy admin session (which
+    has no auth token) can still pass through."""
+    if not x_auth_token:
+        return None
+    state = _gc_auth(_load_auth())
+    record = state["sessions"].get(x_auth_token)
+    return record["email"] if record else None
+
+
+def _attach_corpus_to_user(email: str, slug: str) -> None:
+    state = _load_auth()
+    owned = state["users"].setdefault(email, [])
+    if slug not in owned:
+        owned.append(slug)
+    _save_auth(state)
+
+
+def _detach_corpus_from_user(email: str, slug: str) -> None:
+    state = _load_auth()
+    owned = state["users"].get(email, [])
+    if slug in owned:
+        owned.remove(slug)
+        _save_auth(state)
+
+
+@app.get("/auth/me")
+def auth_me(email: str = Depends(get_auth)):
+    state = _load_auth()
+    return {"email": email, "corpora": state["users"].get(email, [])}
+
+
+@app.post("/auth/logout", status_code=204)
+def auth_logout(x_auth_token: str | None = Header(None)):
+    if not x_auth_token:
+        return
+    state = _load_auth()
+    state["sessions"].pop(x_auth_token, None)
+    _save_auth(state)
+
+
 # ---- Multi-tenant corpus session layer ------------------------------------
 # Each browser holds an opaque session value in localStorage and sends it as
 # X-Corpus-Session on every request. The session value IS the corpus slug
@@ -98,7 +322,7 @@ app.add_middleware(
 CORPORA_ROOT = REPO / "_corpora"
 LEGACY_SESSION = os.environ["LEGACY_SESSION"]
 
-# Upload limits for /import/notes — the only unauthenticated endpoint.
+# Upload limits for /import/notes.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024   # 500 MB uncompressed (zip-bomb defense)
 
@@ -112,6 +336,24 @@ def get_session(x_corpus_session: str | None = Header(None)) -> str:
 def require_legacy(session: str = Depends(get_session)) -> None:
     if session != LEGACY_SESSION:
         raise HTTPException(403, "this endpoint is reserved for the legacy admin session")
+
+
+def require_corpus_access(
+    session: str = Depends(get_session),
+    auth_email: str | None = Depends(get_auth_optional),
+) -> str:
+    """Gate on (auth token, corpus ownership). The legacy admin session
+    bypasses the email check — it's authenticated by knowledge of the
+    server-side LEGACY_SESSION secret. Every other corpus session requires
+    an X-Auth-Token whose user owns the slug."""
+    if session == LEGACY_SESSION:
+        return session
+    if auth_email is None:
+        raise HTTPException(401, "auth required: missing or invalid X-Auth-Token")
+    state = _load_auth()
+    if session not in state["users"].get(auth_email, []):
+        raise HTTPException(403, "this corpus is not owned by the authenticated user")
+    return session
 
 
 def corpus_dir(session: str) -> Path:
@@ -161,7 +403,7 @@ def _load_state(corpus_id: str = "andrew"):
 
 
 @app.get("/eras")
-def list_eras(session: str = Depends(get_session)):
+def list_eras(session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
     # Validate the session resolves to an actual on-disk corpus.
     corpus_dir(session)
@@ -199,7 +441,7 @@ def _note_source(rel: str, corpus_id: str = "andrew") -> str:
 
 
 @app.get("/notes")
-def list_notes(era: str, session: str = Depends(get_session)):
+def list_notes(era: str, session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     _, by_era, _ = _load_state(corpus_id)
@@ -331,7 +573,7 @@ def _prepare_themes_run(top_n: int = 10) -> dict:
 
 
 @app.post("/promote")
-def promote(req: PromoteRequest, session: str = Depends(get_session)):
+def promote(req: PromoteRequest, session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     run_dir = (REPO / req.run_dir).resolve()
@@ -371,7 +613,7 @@ def promote(req: PromoteRequest, session: str = Depends(get_session)):
 
 
 @app.post("/draft")
-async def draft(req: DraftRequest, session: str = Depends(get_session)):
+async def draft(req: DraftRequest, session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     inputs = _prepare_run(req.era, corpus_id=corpus_id, include_future=req.future)
@@ -881,7 +1123,11 @@ def _build_kickoff(run_dir_abs: Path, user_msg: str) -> str:
 
 
 @app.websocket("/session")
-async def session(ws: WebSocket, session: str | None = None):
+async def session(
+    ws: WebSocket,
+    session: str | None = None,
+    auth: str | None = None,
+):
     await ws.accept()
     tasks: list[asyncio.Task] = []
     run_dir: Path | None = None
@@ -893,24 +1139,37 @@ async def session(ws: WebSocket, session: str | None = None):
         except Exception:
             pass
 
-    # Browser WebSockets can't set custom headers, so the session value rides
-    # on the URL: /session?session=<slug>. Validate it resolves to a real corpus.
-    if not session:
-        await send({"type": "error", "message": "missing ?session= query param"})
+    async def reject(message: str):
+        await send({"type": "error", "message": message})
         try:
             await ws.close()
         except Exception:
             pass
+
+    # Browser WebSockets can't set custom headers, so both the corpus session
+    # and the auth token ride on the URL: /session?session=<slug>&auth=<token>.
+    if not session:
+        await reject("missing ?session= query param")
         return
     try:
         corpus_dir(session)
     except HTTPException as e:
-        await send({"type": "error", "message": e.detail})
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        await reject(e.detail)
         return
+    # Auth gate: legacy admin session bypasses email auth; everything else
+    # requires an auth token whose user owns the slug.
+    if session != LEGACY_SESSION:
+        if not auth:
+            await reject("auth required: missing ?auth= query param")
+            return
+        state = _gc_auth(_load_auth())
+        record = state["sessions"].get(auth)
+        if not record:
+            await reject("invalid or expired auth token")
+            return
+        if session not in state["users"].get(record["email"], []):
+            await reject("this corpus is not owned by the authenticated user")
+            return
     corpus_id = _session_corpus_id(session)
 
     try:
@@ -1202,15 +1461,14 @@ def _zip_content_hash(zip_bytes: bytes) -> str:
     return h.hexdigest()
 
 
-def _find_existing_corpus_by_hash(content_hash: str) -> str | None:
-    """Scan _corpora/*/_meta.json for an existing corpus with this content
-    hash. Returns the slug if found, else None."""
-    if not CORPORA_ROOT.exists():
-        return None
-    for d in CORPORA_ROOT.iterdir():
-        if not d.is_dir():
-            continue
-        meta_path = d / "_meta.json"
+def _find_existing_corpus_by_hash(
+    content_hash: str, allowed_slugs: list[str]
+) -> str | None:
+    """Find a corpus owned by the caller with matching content hash. Returns
+    the slug if found, else None. Scoped to allowed_slugs so users can't
+    'discover' another user's corpus by uploading the same content."""
+    for slug in allowed_slugs:
+        meta_path = CORPORA_ROOT / slug / "_meta.json"
         if not meta_path.exists():
             continue
         try:
@@ -1218,20 +1476,22 @@ def _find_existing_corpus_by_hash(content_hash: str) -> str | None:
         except Exception:
             continue
         if meta.get("content_hash") == content_hash:
-            return d.name
+            return slug
     return None
 
 
 @app.post("/import/notes")
-async def import_notes(file: UploadFile = File(...)):
+async def import_notes(
+    file: UploadFile = File(...),
+    email: str = Depends(get_auth),
+):
     """Accept a zip of notes, extract into _corpora/<new-slug>/notes/.
-    Returns the freshly-minted slug — caller stores it as their session.
-    No auth required: importing IS how a session is established.
+    Attaches the new slug to the authenticated user's account.
 
-    If a corpus with an identical content hash already exists, returns its
-    existing slug (with duplicate=true) instead of creating a new one. This
-    lets re-uploads recover an abandoned or in-progress import without
-    accumulating orphans on disk."""
+    If the user already owns a corpus with the same content hash, returns
+    that existing slug (with duplicate=true) instead of creating a new one.
+    Dedup is scoped per-user so different users uploading identical content
+    do not end up sharing a corpus."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "expected a .zip file")
     # Streaming size cap — abort if the upload exceeds MAX_UPLOAD_BYTES
@@ -1258,7 +1518,9 @@ async def import_notes(file: UploadFile = File(...)):
         content_hash = _zip_content_hash(content)
     except zipfile.BadZipFile:
         raise HTTPException(400, "not a valid zip file")
-    existing_slug = _find_existing_corpus_by_hash(content_hash)
+
+    user_corpora = _load_auth()["users"].get(email, [])
+    existing_slug = _find_existing_corpus_by_hash(content_hash, user_corpora)
     if existing_slug:
         notes_dir = CORPORA_ROOT / existing_slug / "notes"
         note_count = (
@@ -1284,10 +1546,12 @@ async def import_notes(file: UploadFile = File(...)):
     meta = {
         "content_hash": content_hash,
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "owner": email,
     }
     (CORPORA_ROOT / slug / "_meta.json").write_text(
         json.dumps(meta), encoding="utf-8"
     )
+    _attach_corpus_to_user(email, slug)
 
     return {"slug": slug, "note_count": note_count, "duplicate": False}
 
@@ -1295,7 +1559,7 @@ async def import_notes(file: UploadFile = File(...)):
 @app.post("/import/eras")
 async def import_eras(
     file: UploadFile = File(...),
-    session: str = Depends(get_session),
+    session: str = Depends(require_corpus_access),
 ):
     """Accept an eras.yaml for the session's corpus."""
     if session == LEGACY_SESSION:
@@ -1317,7 +1581,7 @@ async def import_eras(
 
 
 @app.get("/corpus")
-def get_corpus(session: str = Depends(get_session)):
+def get_corpus(session: str = Depends(require_corpus_access)):
     """Return current corpus state for the session — used at page load to
     decide whether to show import flow, imported view, or legacy app."""
     cdir = corpus_dir(session)
@@ -1346,10 +1610,15 @@ def get_corpus(session: str = Depends(get_session)):
 
 
 @app.post("/corpus/wipe")
-def wipe_corpus(session: str = Depends(get_session)):
+def wipe_corpus(
+    session: str = Depends(require_corpus_access),
+    auth_email: str | None = Depends(get_auth_optional),
+):
     """Hard-delete the session's corpus dir. Legacy is never wipeable here."""
     if session == LEGACY_SESSION:
         raise HTTPException(403, "cannot wipe the legacy corpus through the app")
     cdir = corpus_dir(session)
     shutil.rmtree(cdir)
+    if auth_email:
+        _detach_corpus_from_user(auth_email, session)
     return {"ok": True}

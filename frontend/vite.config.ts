@@ -8,6 +8,7 @@ export default defineConfig({
   base: process.env.BASE_PATH ?? "/",
   server: {
     proxy: {
+      "/auth": "http://localhost:8000",
       "/corpus": "http://localhost:8000",
       "/eras": "http://localhost:8000",
       "/notes": "http://localhost:8000",
