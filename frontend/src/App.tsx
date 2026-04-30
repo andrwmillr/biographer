@@ -294,14 +294,20 @@ export default function App() {
         throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
       const data = await resp.json();
       setSession(data.slug);
-      setCorpusInfo({
-        slug: data.slug,
-        is_legacy: false,
-        note_count: data.note_count,
-        has_eras: false,
-        eras: [],
-      });
-      setCorpusMode("import-eras");
+      // Re-fetch corpus state — if this was a dedup match against an existing
+      // corpus that already has eras, route directly to "ready" instead of
+      // forcing the user to re-upload yaml.
+      const c = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
+      const info = (await c.json()) as CorpusInfo;
+      setCorpusInfo(info);
+      setCorpusMode(info.has_eras ? "ready" : "import-eras");
+      if (data.duplicate) {
+        setImportError(
+          info.has_eras
+            ? "Welcome back — found your existing corpus with this content."
+            : "Welcome back — found your existing corpus. Continue with eras.",
+        );
+      }
     } catch (err) {
       setImportError(`notes upload failed: ${(err as Error).message}`);
     }

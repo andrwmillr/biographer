@@ -13,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -1167,17 +1168,57 @@ def _extract_zip_safe(content: bytes, target: Path) -> int:
         raise HTTPException(400, "not a valid zip file")
 
 
+def _find_existing_corpus_by_hash(content_hash: str) -> str | None:
+    """Scan _corpora/*/_meta.json for an existing corpus with this content
+    hash. Returns the slug if found, else None."""
+    if not CORPORA_ROOT.exists():
+        return None
+    for d in CORPORA_ROOT.iterdir():
+        if not d.is_dir():
+            continue
+        meta_path = d / "_meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if meta.get("content_hash") == content_hash:
+            return d.name
+    return None
+
+
 @app.post("/import/notes")
 async def import_notes(file: UploadFile = File(...)):
     """Accept a zip of notes, extract into _corpora/<new-slug>/notes/.
     Returns the freshly-minted slug — caller stores it as their session.
-    No auth required: importing IS how a session is established."""
+    No auth required: importing IS how a session is established.
+
+    If a corpus with an identical content hash already exists, returns its
+    existing slug (with duplicate=true) instead of creating a new one. This
+    lets re-uploads recover an abandoned or in-progress import without
+    accumulating orphans on disk."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "expected a .zip file")
     try:
         content = await file.read()
     finally:
         await file.close()
+
+    content_hash = hashlib.sha256(content).hexdigest()
+    existing_slug = _find_existing_corpus_by_hash(content_hash)
+    if existing_slug:
+        notes_dir = CORPORA_ROOT / existing_slug / "notes"
+        note_count = (
+            sum(1 for p in notes_dir.rglob("*") if p.is_file())
+            if notes_dir.exists()
+            else 0
+        )
+        return {
+            "slug": existing_slug,
+            "note_count": note_count,
+            "duplicate": True,
+        }
 
     slug = make_slug()
     target = CORPORA_ROOT / slug / "notes"
@@ -1187,7 +1228,16 @@ async def import_notes(file: UploadFile = File(...)):
         # Clean up partial extraction.
         shutil.rmtree(CORPORA_ROOT / slug, ignore_errors=True)
         raise
-    return {"slug": slug, "note_count": note_count}
+
+    meta = {
+        "content_hash": content_hash,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    (CORPORA_ROOT / slug / "_meta.json").write_text(
+        json.dumps(meta), encoding="utf-8"
+    )
+
+    return {"slug": slug, "note_count": note_count, "duplicate": False}
 
 
 @app.post("/import/eras")
