@@ -210,6 +210,25 @@ export default function App() {
   const narrationBufRef = useRef<string>("");
   const convLogRef = useRef<HTMLDivElement | null>(null);
 
+  // ---- Themes flow state ----
+  const [viewMode, setViewMode] = useState<"eras" | "themes">("eras");
+  const [themesTopN, setThemesTopN] = useState<number>(10);
+  const [themesPhase, setThemesPhase] = useState<
+    "idle" | "spinning" | "spin-done" | "curating" | "locked" | "error"
+  >("idle");
+  const [themesRunDir, setThemesRunDir] = useState<string>("");
+  const [themesOutput, setThemesOutput] = useState<string>("");
+  const [themesLog, setThemesLog] = useState<LogItem[]>([]);
+  const [themesReply, setThemesReply] = useState<string>("");
+  const [themesLocked, setThemesLocked] = useState<string>("");
+  const [themesCost, setThemesCost] = useState<number>(0);
+  const [themesStatus, setThemesStatus] = useState<
+    "idle" | "generating" | "awaiting_reply" | "done" | "error"
+  >("idle");
+  const themesWsRef = useRef<WebSocket | null>(null);
+  const themesNarrationBufRef = useRef<string>("");
+  const themesLogRef = useRef<HTMLDivElement | null>(null);
+
   const [showNotes, setShowNotes] = useState<boolean>(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [notesLoading, setNotesLoading] = useState<boolean>(false);
@@ -228,7 +247,7 @@ export default function App() {
     eras: Array<{ name: string; start: string; end?: string }>;
   };
   const [corpusMode, setCorpusMode] = useState<
-    "loading" | "import-notes" | "import-eras" | "imported" | "legacy" | "error"
+    "loading" | "import-notes" | "import-eras" | "ready" | "error"
   >("loading");
   const [corpusInfo, setCorpusInfo] = useState<CorpusInfo | null>(null);
   const [importError, setImportError] = useState<string>("");
@@ -253,9 +272,8 @@ export default function App() {
       .then((info) => {
         if (!info) return;
         setCorpusInfo(info);
-        if (info.is_legacy) setCorpusMode("legacy");
-        else if (!info.has_eras) setCorpusMode("import-eras");
-        else setCorpusMode("imported");
+        if (!info.has_eras) setCorpusMode("import-eras");
+        else setCorpusMode("ready");
       })
       .catch((err: Error) => {
         setError(`session check failed: ${err.message}`);
@@ -304,7 +322,7 @@ export default function App() {
       const c = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
       const info = (await c.json()) as CorpusInfo;
       setCorpusInfo(info);
-      setCorpusMode("imported");
+      setCorpusMode("ready");
     } catch (err) {
       setImportError(`eras upload failed: ${(err as Error).message}`);
     }
@@ -334,7 +352,7 @@ export default function App() {
   }, [wsStatus]);
 
   useEffect(() => {
-    if (corpusMode !== "legacy") return;
+    if (corpusMode !== "ready") return;
     fetch(`${API_BASE}/eras`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: Era[]) => {
@@ -356,7 +374,7 @@ export default function App() {
   }, [log, wsStatus]);
 
   useEffect(() => {
-    if (corpusMode !== "legacy") return;
+    if (corpusMode !== "ready") return;
     if (!showNotes || !selected || selected === notesEra) return;
     let cancelled = false;
     (async () => {
@@ -601,6 +619,180 @@ export default function App() {
     setWsStatus("done");
   }
 
+  // ---- Themes flow handlers ----
+
+  function flushThemesNarration() {
+    if (!themesNarrationBufRef.current) return;
+    const text = themesNarrationBufRef.current;
+    themesNarrationBufRef.current = "";
+    setThemesLog((l) => {
+      const last = l[l.length - 1];
+      if (last && last.kind === "narration") {
+        return [...l.slice(0, -1), { kind: "narration", text: last.text + text }];
+      }
+      return [...l, { kind: "narration", text }];
+    });
+  }
+
+  async function startThemesSpin() {
+    setThemesPhase("spinning");
+    setThemesOutput("");
+    setThemesRunDir("");
+    setThemesLocked("");
+    setThemesLog([]);
+    setError("");
+
+    try {
+      const resp = await fetch(`${API_BASE}/themes-spin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ top_n: themesTopN, model }),
+      });
+      if (!resp.ok || !resp.body) {
+        throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      }
+      const reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += value;
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let payload: any;
+          try {
+            payload = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+          if (payload.type === "delta") {
+            setThemesOutput((s) => s + payload.text);
+          } else if (payload.type === "start") {
+            setThemesRunDir(payload.run_dir);
+          } else if (payload.type === "done") {
+            setThemesPhase("spin-done");
+            setThemesCost(payload.cost_usd ?? 0);
+          } else if (payload.type === "error") {
+            setError(payload.message);
+            setThemesPhase("error");
+          }
+        }
+      }
+    } catch (e) {
+      setError(`spin failed: ${(e as Error).message}`);
+      setThemesPhase("error");
+    }
+  }
+
+  function startCuration() {
+    if (!themesRunDir) return;
+    setThemesPhase("curating");
+    setThemesStatus("generating");
+    setThemesLog([]);
+    setThemesReply("");
+    themesNarrationBufRef.current = "";
+    setError("");
+
+    const ws = new WebSocket(
+      `${WS_BASE}/themes-curate?session=${encodeURIComponent(getSession() || "")}`,
+    );
+    themesWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "start", run_dir: themesRunDir, model }));
+    };
+    ws.onmessage = (ev) => {
+      let payload: any;
+      try {
+        payload = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      const t = payload.type;
+      if (t === "narration") {
+        themesNarrationBufRef.current += payload.text;
+        flushThemesNarration();
+      } else if (t === "status") {
+        flushThemesNarration();
+        if (payload.status === "generating") setThemesStatus("generating");
+        else if (payload.status === "awaiting_reply") setThemesStatus("awaiting_reply");
+      } else if (t === "tool_use") {
+        flushThemesNarration();
+        setThemesLog((l) => [
+          ...l,
+          { kind: "tool", id: payload.id, name: payload.name, input: payload.input },
+        ]);
+      } else if (t === "tool_result") {
+        setThemesLog((l) =>
+          l.map((it) =>
+            it.kind === "tool" && it.id === payload.id
+              ? {
+                  ...it,
+                  result: payload.is_error ? "err" : "ok",
+                  error_text: payload.is_error ? payload.text : undefined,
+                }
+              : it,
+          ),
+        );
+      } else if (t === "themes_update") {
+        setThemesLocked(payload.content);
+        setThemesPhase("locked");
+      } else if (t === "turn_end") {
+        flushThemesNarration();
+        if (typeof payload.cost_usd === "number") setThemesCost(payload.cost_usd);
+      } else if (t === "done") {
+        flushThemesNarration();
+        setThemesStatus("done");
+        if (typeof payload.cost_usd === "number") setThemesCost(payload.cost_usd);
+      } else if (t === "log") {
+        flushThemesNarration();
+        setThemesLog((l) => [...l, { kind: "status", text: payload.text }]);
+      } else if (t === "error") {
+        setError(payload.message);
+        setThemesStatus("error");
+      }
+    };
+    ws.onerror = () => {
+      setError("themes websocket error");
+      setThemesStatus("error");
+    };
+    ws.onclose = () => {
+      flushThemesNarration();
+      if (themesStatus !== "done" && themesStatus !== "error") setThemesStatus("done");
+    };
+  }
+
+  function sendThemesReply() {
+    const ws = themesWsRef.current;
+    if (!ws || !themesReply.trim()) return;
+    ws.send(JSON.stringify({ type: "reply", text: themesReply }));
+    setThemesLog((l) => [...l, { kind: "user", text: themesReply }]);
+    setThemesReply("");
+    setThemesStatus("generating");
+  }
+
+  function stopThemesCuration() {
+    const ws = themesWsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "stop" }));
+      ws.close();
+    }
+    setThemesStatus("done");
+  }
+
+  // Auto-scroll themes log to bottom on updates.
+  useEffect(() => {
+    const el = themesLogRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const lastItem = themesLog[themesLog.length - 1];
+    if (lastItem?.kind === "user" || distanceFromBottom < 120) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [themesLog, themesStatus]);
+
   const selectedEra = eras.find((e) => e.name === selected);
   const wsActive = wsStatus !== "idle" && wsStatus !== "done" && wsStatus !== "error";
 
@@ -681,28 +873,12 @@ export default function App() {
           </div>
         </div>
       )}
-      {corpusMode === "imported" && corpusInfo && (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50">
-          <div className="max-w-md w-full p-8">
-            <h1 className="font-serif text-2xl mb-2">Corpus imported</h1>
-            <p className="text-stone-600 mb-2 text-sm">
-              {corpusInfo.note_count} notes • {corpusInfo.eras.length} eras
-            </p>
-            {corpusInfo.eras.length > 0 && (
-              <ul className="text-sm text-stone-700 mt-4 space-y-1 border-l-2 border-stone-200 pl-3">
-                {corpusInfo.eras.map((era, i) => (
-                  <li key={i} className="flex justify-between gap-4">
-                    <span>{era.name}</span>
-                    <span className="text-stone-500 text-xs tabular-nums">
-                      {formatEraStart(era.start)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="text-stone-600 text-sm mt-6 leading-relaxed">
-              Drafting against imported corpora isn't connected yet — that's the next piece. For now, your corpus is uploaded and ready.
-            </p>
+      {corpusMode === "ready" && (
+        <div className="min-h-full relative">
+          <header className="border-b border-stone-200 bg-white">
+        <div className="mx-auto max-w-5xl px-6 py-4 flex items-center gap-4">
+          <h1 className="font-serif text-xl">Biographer</h1>
+          {corpusInfo && !corpusInfo.is_legacy && (
             <button
               onClick={() => {
                 if (
@@ -713,21 +889,37 @@ export default function App() {
                   handleWipe();
                 }
               }}
-              className="mt-6 text-sm text-red-600 hover:text-red-700"
+              className="text-xs text-stone-400 hover:text-red-600"
+              title="Delete this corpus"
             >
               Wipe corpus
             </button>
-            {importError && (
-              <p className="mt-4 text-red-600 text-sm">{importError}</p>
-            )}
+          )}
+          <div className="flex items-center gap-1 ml-2">
+            <button
+              className={
+                "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                (viewMode === "eras"
+                  ? "text-stone-700 border-b-2 border-stone-700"
+                  : "text-stone-400 hover:text-stone-700")
+              }
+              onClick={() => setViewMode("eras")}
+            >
+              Eras
+            </button>
+            <button
+              className={
+                "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                (viewMode === "themes"
+                  ? "text-stone-700 border-b-2 border-stone-700"
+                  : "text-stone-400 hover:text-stone-700")
+              }
+              onClick={() => setViewMode("themes")}
+            >
+              Themes
+            </button>
           </div>
-        </div>
-      )}
-      {corpusMode === "legacy" && (
-        <div className="min-h-full relative">
-          <header className="border-b border-stone-200 bg-white">
-        <div className="mx-auto max-w-5xl px-6 py-4 flex items-center gap-4">
-          <h1 className="font-serif text-xl">Biographer</h1>
+          {viewMode === "eras" && (
           <div className="ml-auto flex items-center gap-2">
             <select
               className="rounded border border-stone-300 bg-white px-2 py-1 text-sm"
@@ -736,7 +928,12 @@ export default function App() {
               disabled={wsActive}
             >
               {eras.map((e) => (
-                <option key={e.name} value={e.name} disabled={e.note_count === 0}>
+                <option
+                  key={e.name}
+                  value={e.name}
+                  disabled={e.note_count === 0}
+                  title={`from ${formatEraStart(e.start)}`}
+                >
                   {e.name} ({e.note_count})
                   {e.has_chapter ? " ✓" : ""}
                 </option>
@@ -786,6 +983,56 @@ export default function App() {
               </button>
             )}
           </div>
+          )}
+          {viewMode === "themes" && (
+          <div className="ml-auto flex items-center gap-2">
+            <select
+              className="rounded border border-stone-300 bg-white px-2 py-1 text-sm"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={themesPhase === "spinning" || themesPhase === "curating"}
+              title="Model used for themes"
+            >
+              <option value="opus-4.7">opus-4.7</option>
+              <option value="opus-4.6">opus-4.6</option>
+              <option value="sonnet-4.6">sonnet-4.6</option>
+            </select>
+            <label className="text-xs text-stone-600 flex items-center gap-1">
+              top-n
+              <input
+                type="number"
+                min={3}
+                max={20}
+                value={themesTopN}
+                onChange={(e) => setThemesTopN(parseInt(e.target.value) || 10)}
+                disabled={themesPhase === "spinning" || themesPhase === "curating"}
+                className="w-12 rounded border border-stone-300 bg-white px-1 py-1 text-sm tabular-nums"
+              />
+            </label>
+            {themesPhase === "curating" ? (
+              <button
+                className="rounded bg-stone-800 px-3 py-1 text-sm text-white hover:bg-stone-700"
+                onClick={stopThemesCuration}
+              >
+                Stop
+              </button>
+            ) : themesPhase === "spinning" ? (
+              <button
+                className="rounded bg-stone-400 px-3 py-1 text-sm text-white"
+                disabled
+              >
+                Generating…
+              </button>
+            ) : (
+              <button
+                className="rounded bg-stone-900 px-3 py-1 text-sm text-white hover:bg-stone-700"
+                onClick={startThemesSpin}
+              >
+                {themesPhase === "spin-done" || themesPhase === "locked" ? "Re-spin" : "Generate themes"}
+              </button>
+            )}
+          </div>
+          )}
         </div>
       </header>
 
@@ -800,6 +1047,7 @@ export default function App() {
           </div>
         )}
 
+        {viewMode === "eras" && (
         <div className={showNotes ? "flex gap-6" : ""}>
             <section className="flex-[11] min-w-0 flex flex-col h-[80vh]">
               <div className="mb-2 flex items-center gap-1 border-b border-stone-200">
@@ -1369,9 +1617,192 @@ export default function App() {
               );
             })()}
         </div>
+        )}
+        {viewMode === "themes" && (
+          <section className="flex flex-col h-[80vh]">
+            <div className="mb-2 flex items-center gap-2 border-b border-stone-200 pb-2">
+              <span className="font-sans text-xs uppercase tracking-wider text-stone-700">
+                {themesPhase === "idle" && "no run yet"}
+                {themesPhase === "spinning" && "generating round 1…"}
+                {themesPhase === "spin-done" && "round 1 done — ready to curate"}
+                {themesPhase === "curating" && "curating"}
+                {themesPhase === "locked" && "themes locked"}
+                {themesPhase === "error" && "error"}
+              </span>
+              {themesRunDir && (
+                <span className="font-mono text-[11px] text-stone-400 truncate">
+                  {themesRunDir}
+                </span>
+              )}
+              {themesCost > 0 && (
+                <span className="font-sans text-xs text-stone-500 ml-auto tabular-nums">
+                  ${themesCost.toFixed(4)}
+                </span>
+              )}
+            </div>
+
+            {themesPhase === "idle" && (
+              <div className="flex-1 flex items-center justify-center text-stone-400 text-sm">
+                Click <span className="font-medium mx-1 text-stone-600">Generate themes</span> to start round 1.
+              </div>
+            )}
+
+            {(themesPhase === "spinning" || themesPhase === "spin-done") && (
+              <article className="flex-1 overflow-auto rounded border border-stone-200 bg-white p-6 font-serif text-[15px] leading-[1.7] text-stone-900">
+                {themesOutput ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAPTER_MD_COMPONENTS}>
+                    {themesOutput}
+                  </ReactMarkdown>
+                ) : (
+                  <span className="font-sans text-sm text-stone-400">
+                    {themesPhase === "spinning" ? "starting…" : "(no output)"}
+                  </span>
+                )}
+              </article>
+            )}
+
+            {themesPhase === "spin-done" && (
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  className="rounded bg-stone-900 px-4 py-2 text-sm text-white hover:bg-stone-700"
+                  onClick={startCuration}
+                >
+                  Curate themes
+                </button>
+                <span className="text-xs text-stone-500">
+                  go from candidates to ~5 final themes
+                </span>
+              </div>
+            )}
+
+            {themesPhase === "curating" && (
+              <>
+                <div
+                  ref={themesLogRef}
+                  className="flex-1 rounded border border-stone-200 bg-white p-4 font-sans text-sm text-stone-800 overflow-auto"
+                >
+                  {themesStatus === "generating" && themesLog.length === 0 && (
+                    <span className="text-stone-400">starting curation…</span>
+                  )}
+                  {themesLog.map((it, i) => {
+                    if (it.kind === "narration")
+                      return (
+                        <div key={i}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                            {it.text}
+                          </ReactMarkdown>
+                        </div>
+                      );
+                    if (it.kind === "user") {
+                      return (
+                        <div key={i} className="my-3 flex justify-end">
+                          <div className="max-w-[85%] rounded-lg bg-stone-100 border border-stone-200 px-3 py-2 text-stone-800 whitespace-pre-wrap">
+                            {it.text}
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (it.kind === "tool") {
+                      return (
+                        <div key={i} className="my-1 text-xs font-mono">
+                          <div className="text-stone-500">
+                            {formatTool(it.name, it.input, themesRunDir)}
+                            {it.result === "ok" && " ✓"}
+                            {it.result === "err" && " ✗"}
+                          </div>
+                          {it.error_text && (
+                            <div className="ml-4 mt-0.5 whitespace-pre-wrap text-red-700">
+                              {it.error_text}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                  {themesStatus === "generating" && themesLog.length > 0 && (
+                    <span className="inline-block w-2 h-4 ml-0.5 align-text-bottom bg-stone-400 animate-pulse" />
+                  )}
+                </div>
+
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center gap-2 text-xs font-sans">
+                    {themesStatus === "generating" && (
+                      <>
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                        <span className="text-amber-700">working…</span>
+                      </>
+                    )}
+                    {themesStatus === "awaiting_reply" && (
+                      <>
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <span className="text-emerald-700">your move (drop, merge, propose, /lock)</span>
+                      </>
+                    )}
+                    {themesStatus === "done" && (
+                      <span className="text-stone-500">curation ended</span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <textarea
+                      className={
+                        "block w-full resize-none rounded border px-3 pt-2 pb-11 text-sm font-sans disabled:text-stone-400 transition-colors " +
+                        (themesStatus === "awaiting_reply"
+                          ? "border-emerald-400 bg-white"
+                          : "border-stone-300 bg-stone-50")
+                      }
+                      rows={3}
+                      value={themesReply}
+                      placeholder={
+                        themesStatus === "awaiting_reply"
+                          ? "drop X / merge X and Y / propose: theme name / /lock"
+                          : "wait for the model…"
+                      }
+                      disabled={themesStatus !== "awaiting_reply"}
+                      onChange={(e) => setThemesReply(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey && themesReply.trim()) {
+                          e.preventDefault();
+                          sendThemesReply();
+                        }
+                      }}
+                    />
+                    <button
+                      className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-stone-900 text-white hover:bg-stone-700 disabled:opacity-40"
+                      onClick={sendThemesReply}
+                      disabled={themesStatus !== "awaiting_reply" || !themesReply.trim()}
+                      aria-label="Send"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                      >
+                        <path d="M9 14l-4-4 4-4" />
+                        <path d="M5 10h11a4 4 0 0 1 4 4v2" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {themesPhase === "locked" && themesLocked && (
+              <article className="flex-1 overflow-auto rounded border border-stone-200 bg-white p-6 font-serif text-[15px] leading-[1.7] text-stone-900">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAPTER_MD_COMPONENTS}>
+                  {themesLocked}
+                </ReactMarkdown>
+              </article>
+            )}
+          </section>
+        )}
       </main>
 
-      {selected && (selectedEra?.note_count ?? 0) > 0 && (
+      {viewMode === "eras" && selected && (selectedEra?.note_count ?? 0) > 0 && (
         <div className="absolute top-[5rem] right-6 z-50 flex items-end pointer-events-none">
           <div className="flex items-center pointer-events-auto">
             {showNotes && (
