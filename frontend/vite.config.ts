@@ -8,10 +8,13 @@ export default defineConfig({
   base: process.env.BASE_PATH ?? "/",
   server: {
     proxy: {
+      "/corpus": "http://localhost:8000",
       "/eras": "http://localhost:8000",
       "/notes": "http://localhost:8000",
+      "/import": "http://localhost:8000",
       "/draft": "http://localhost:8000",
       "/promote": "http://localhost:8000",
+      "/themes-spin": "http://localhost:8000",
       "/session": { target: "ws://localhost:8000", ws: true },
     },
   },

@@ -91,11 +91,12 @@ app.add_middleware(
 # X-Corpus-Session on every request. The session value IS the corpus slug
 # under _corpora/<slug>/. The legacy single-tenant corpus at _corpus/ is
 # accessed by the special session value LEGACY_SESSION (Andrew's admin
-# session); set it once in DevTools:
-#   localStorage.setItem('corpusSession', '_andrew_legacy')
+# session). Value is loaded from env (set in _scripts/.env, never committed).
+# Set it once in DevTools:
+#   localStorage.setItem('corpusSession', '<value of LEGACY_SESSION>')
 
 CORPORA_ROOT = REPO / "_corpora"
-LEGACY_SESSION = "_andrew_legacy"
+LEGACY_SESSION = os.environ["LEGACY_SESSION"]
 
 
 def get_session(x_corpus_session: str | None = Header(None)) -> str:
@@ -114,6 +115,11 @@ def corpus_dir(session: str) -> Path:
     Raises 401 for invalid / nonexistent sessions."""
     if session == LEGACY_SESSION:
         return REPO / "_corpora" / "andrew"
+    # Reject session values that could be the host's directory name or that
+    # don't match the issued slug shape. Imported corpora use slugs like
+    # "c_<16 hex>" — anything else is an attack or a typo.
+    if not re.fullmatch(r"c_[0-9a-f]{16}", session):
+        raise HTTPException(401, "invalid session")
     candidate = CORPORA_ROOT / session
     try:
         candidate.resolve().relative_to(CORPORA_ROOT.resolve())
@@ -245,7 +251,7 @@ def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool 
         future_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in future]
         future_d = wb.load_future_thread_digests(era_name, corpus_id)
         future_digest_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{d}" for n, d in future_d]
-    era_msg = wb.build_user_msg(era_name, notes)
+    era_msg = wb.build_user_msg(era_name, notes, corpus_id=corpus_id)
 
     parts = []
     if prior_blocks:
