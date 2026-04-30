@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CorpusInfo } from "./ImportFlow";
 import { authHeaders, getAuthToken, getSession } from "./auth";
+import { HeaderMenu } from "./HeaderMenu";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -517,33 +518,6 @@ export function ErasView({
       <header className="border-b border-stone-200 bg-white">
         <div className="mx-auto max-w-5xl px-6 py-4 flex items-center gap-4">
           <h1 className="font-serif text-xl">Biographer</h1>
-          {!corpusInfo.is_legacy && (
-            <button
-              onClick={handleWipeClick}
-              className="text-xs text-stone-400 hover:text-red-600"
-              title="Delete this corpus"
-            >
-              Wipe corpus
-            </button>
-          )}
-          {userEmail && userCorpora.length > 1 && (
-            <button
-              onClick={onSwitchCorpus}
-              className="text-xs text-stone-400 hover:text-stone-700"
-              title="Switch to another corpus"
-            >
-              Switch corpus
-            </button>
-          )}
-          {userEmail && (
-            <button
-              onClick={onLogout}
-              className="text-xs text-stone-400 hover:text-stone-700"
-              title={`Signed in as ${userEmail}`}
-            >
-              Sign out
-            </button>
-          )}
           <div className="flex items-center gap-1 ml-2">
             <button
               className={
@@ -630,6 +604,14 @@ export function ErasView({
                 Start session
               </button>
             )}
+            <HeaderMenu
+              isLegacy={corpusInfo.is_legacy}
+              userEmail={userEmail}
+              hasMultipleCorpora={userCorpora.length > 1}
+              onWipe={handleWipeClick}
+              onSwitchCorpus={onSwitchCorpus}
+              onLogout={onLogout}
+            />
           </div>
         </div>
       </header>
