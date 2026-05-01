@@ -198,6 +198,19 @@ export function ChatWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsStatus]);
 
+  // visibilitychange doesn't fire on initial mount (the tab was already
+  // visible when the page loaded), so a freshly-opened tab with a
+  // remembered run_id sits empty until the user tab-switches. Kick off
+  // the resume here so the second tab populates immediately. runId in
+  // localStorage is cleared on finalize, so this only fires for runs
+  // the user hasn't explicitly locked yet.
+  useEffect(() => {
+    const runId = runIdRef.current;
+    if (!runId) return;
+    startSession({ resumeRunId: runId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-expand draft on first draft content arrival — but only the
   // very first time the workspace has ever shown a draft on this device.
   // The flag below latches in localStorage; subsequent mounts let the
@@ -586,7 +599,7 @@ export function ChatWorkspace({
       promptStatus === "pre-gen"
         ? scope.kind === "era"
           ? "Press ▶ to start drafting this chapter. The agent reads notes, drafts, then opens the chat."
-          : "Press ▶ to surface the top recurring threads. The agent reads notes, sketches candidates, then opens the chat."
+          : "Press ▶ to surface top recurring threads. The agent reads notes, sketches candidates, then opens the chat."
         : promptStatus === "generating"
           ? "thinking…"
           : promptStatus === "finalized"
