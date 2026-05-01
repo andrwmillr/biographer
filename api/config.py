@@ -2,31 +2,30 @@
 
 Constants live here (not server.py) so tests can monkey-patch the mutable
 ones (CORPORA_ROOT, AUTH_DIR, AUTH_STATE_PATH) and have every consumer see
-the new value via attribute access (`config.CORPORA_ROOT`). All other
-constants are immutable and can be imported by name (`from config import
-REPO, MAX_UPLOAD_BYTES, ...`).
+the new value via attribute access (`api.config.CORPORA_ROOT`). All other
+constants are immutable and can be imported by name (`from api.config
+import REPO, MAX_UPLOAD_BYTES, ...`).
 
-Importing this module also has the side effect of (a) loading
-`scripts/.env` into os.environ and (b) inserting `scripts/` onto
-sys.path. This must run before `import corpus as wb` from any
-module — keep `import config` (or `from config import ...`) at the top of
-every consumer.
+Importing this module also has the side effect of loading
+`_web/.env` into os.environ. This must run before any other api/* or
+core/* import — keep `from api import config` at the top of every
+consumer.
 """
 from __future__ import annotations
 
 import os
 import re
-import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
+# Resolve directory paths.
+WEB_DIR = Path(__file__).resolve().parent.parent  # _web/
+REPO = WEB_DIR.parent                              # notes-archive/
+PROMPTS_DIR = WEB_DIR / "core" / "prompts"
 
-# Load scripts/.env into the environment, but skip ANTHROPIC_API_KEY so
+# Load _web/.env into the environment, but skip ANTHROPIC_API_KEY so
 # claude-agent-sdk falls back to the user's Claude Code subscription
 # instead of billing the API account.
-_env_file = SCRIPTS_DIR / ".env"
+_env_file = WEB_DIR / ".env"
 if _env_file.exists():
     for line in _env_file.read_text().splitlines():
         line = line.strip()
@@ -66,7 +65,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024   # 500 MB uncompressed (zip-bomb defense)
 
 # Prompt files used by drafts + themes flows.
-KICKOFF_PATH = SCRIPTS_DIR / "KICKOFF.md"
-THEMES_R1_PATH = SCRIPTS_DIR / "THEMES_R1.md"
-CURATE_PATH = SCRIPTS_DIR / "CURATE.md"
-CURATE_KICKOFF_PATH = SCRIPTS_DIR / "CURATE_KICKOFF.md"
+KICKOFF_PATH = PROMPTS_DIR / "kickoff.md"
+THEMES_R1_PATH = PROMPTS_DIR / "themes_r1.md"
+CURATE_PATH = PROMPTS_DIR / "curate.md"
+CURATE_KICKOFF_PATH = PROMPTS_DIR / "curate_kickoff.md"

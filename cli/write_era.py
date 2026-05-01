@@ -11,13 +11,18 @@ Usage: python3 write_era.py "Amherst I" [--future]
   --future  also include any later eras' chapters/digests already on disk
             from a previous run (hindsight context).
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from write_biography import (
+from core.corpus import (
     CHAPTER_SYSTEM, CORPUS, ERAS, apply_authorship, apply_date_overrides,
     apply_note_metadata, build_user_msg, era_of, era_slug, flag_date_clusters,
     load_authorship, load_corpus_notes, load_prior_chapters,

@@ -143,7 +143,7 @@ def _pick_task() -> str:
 TASK_VARIANT = _pick_task()
 
 
-CHAPTER_SYSTEM = (Path(__file__).parent / "DRAFTER.md").read_text(encoding="utf-8")
+CHAPTER_SYSTEM = (Path(__file__).parent / "prompts" / "drafter.md").read_text(encoding="utf-8")
 CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__TASK__", TASK_VARIANTS[TASK_VARIANT])
 CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__SUBJECT__", SUBJECT_NAME)
 

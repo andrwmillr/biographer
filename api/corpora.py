@@ -13,13 +13,13 @@ import re
 import secrets
 from pathlib import Path
 
-import config
+from api import config
 import yaml
-from auth import _load_auth, get_auth_optional
-from config import ADMIN_EMAILS
+from api.auth import _load_auth, get_auth_optional
+from api.config import ADMIN_EMAILS
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-import corpus as wb
+from core import corpus as wb
 
 router = APIRouter()
 

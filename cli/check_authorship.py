@@ -8,6 +8,11 @@ asks Sonnet to classify each keeper as authored / clipped / unclear.
 
 Output: _authorship.jsonl (one row per keeper). Resumable.
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import asyncio
 import json
 import os
@@ -18,7 +23,7 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 sys.path.insert(0, str(Path(__file__).parent))
-from write_biography import (  # type: ignore
+from core.corpus import (  # type: ignore
     CORPUS,
     parse_note_body,
 )

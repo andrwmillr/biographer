@@ -15,6 +15,11 @@ Phase A → rating:
 State file (_triage_state.json) stores ONLY Andrew's manual overrides.
 Notes absent from the file fall through to their Phase A default.
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import http.server
 import json
 import random
@@ -26,7 +31,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, str(Path(__file__).parent))
-from write_biography import ERAS, era_of  # type: ignore
+from core.corpus import ERAS, era_of  # type: ignore
 
 CORPUS = Path.home() / "notes-archive" / "_corpora" / "andrew"
 NOTES_DIR = CORPUS / "notes"

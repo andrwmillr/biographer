@@ -24,6 +24,11 @@ chapter system prompt, prompt builder) lives in `corpus.py`. This
 module only contains CLI orchestration: output paths, post-processing
 (quote verification + citation resolution), and the asyncio entry
 point."""
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import asyncio
 import os
 import re
@@ -37,7 +42,7 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 
 # Reuse the data layer.
-from corpus import (
+from core.corpus import (
     BIOGRAPHIES_DIR,
     CHAPTER_SYSTEM,
     ERAS,

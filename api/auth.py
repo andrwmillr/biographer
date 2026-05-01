@@ -17,8 +17,8 @@ import urllib.request
 from datetime import datetime
 from urllib.parse import urlparse
 
-import config
-from config import ALLOWED_ORIGINS, AUTH_TOKEN_TTL, EMAIL_RE, MAGIC_TOKEN_TTL
+from api import config
+from api.config import ALLOWED_ORIGINS, AUTH_TOKEN_TTL, EMAIL_RE, MAGIC_TOKEN_TTL
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel

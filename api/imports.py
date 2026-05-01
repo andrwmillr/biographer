@@ -15,16 +15,16 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-import config
-from auth import (
+from api import config
+from api.auth import (
     _attach_corpus_to_user,
     _detach_corpus_from_user,
     _load_auth,
     get_auth,
     get_auth_optional,
 )
-from config import MAX_UNCOMPRESSED_BYTES, MAX_UPLOAD_BYTES
-from corpora import corpus_dir, make_slug, require_writable
+from api.config import MAX_UNCOMPRESSED_BYTES, MAX_UPLOAD_BYTES
+from api.corpora import corpus_dir, make_slug, require_writable
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 import yaml

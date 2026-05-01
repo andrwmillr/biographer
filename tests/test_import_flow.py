@@ -22,12 +22,11 @@ from fastapi.testclient import TestClient
 
 # conftest.py sets ADMIN_EMAILS in env before this module imports server.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import auth  # noqa: E402
-import config  # noqa: E402
-import corpora  # noqa: E402
-import server  # noqa: E402
-import corpus as wb  # noqa: E402
+from api import auth  # noqa: E402
+from api import config  # noqa: E402
+from api import corpora  # noqa: E402
+from api import server  # noqa: E402
+from core import corpus as wb  # noqa: E402
 
 
 # ---- Test isolation: redirect both config.CORPORA_ROOT (server) AND

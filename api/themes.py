@@ -20,7 +20,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from auth import _gc_auth, _load_auth
+from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -31,12 +31,12 @@ from claude_agent_sdk import (
     UserMessage,
 )
 from claude_agent_sdk.types import StreamEvent
-from config import (
+from api.config import (
     CURATE_PATH,
     REPO,
     THEMES_R1_PATH,
 )
-from corpora import (
+from api.corpora import (
     _load_state,
     _note_source,
     _session_corpus_id,
@@ -46,7 +46,7 @@ from corpora import (
 )
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
-import corpus as wb
+from core import corpus as wb
 
 router = APIRouter()
 

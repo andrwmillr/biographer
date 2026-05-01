@@ -6,11 +6,16 @@ Usage:
     python3 _web/scripts/resolve_citations.py                  # rewrite biography.md
     python3 _web/scripts/resolve_citations.py biography_20260424_171813.md   # rewrite a specific snapshot
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from write_biography import (  # type: ignore
+from core.corpus import (  # type: ignore
     BIOGRAPHIES_DIR,
     apply_date_overrides,
     load_corpus_notes,

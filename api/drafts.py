@@ -15,7 +15,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from auth import _gc_auth, _load_auth
+from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -26,8 +26,8 @@ from claude_agent_sdk import (
     UserMessage,
 )
 from claude_agent_sdk.types import StreamEvent
-from config import KICKOFF_PATH, REPO
-from corpora import (
+from api.config import KICKOFF_PATH, REPO
+from api.corpora import (
     _load_state,
     _session_corpus_id,
     corpus_dir,
@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-import corpus as wb
+from core import corpus as wb
 
 router = APIRouter()
 
