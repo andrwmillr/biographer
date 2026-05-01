@@ -896,31 +896,38 @@ export function ChatWorkspace({
           )}
         </span>
         <div className="flex items-center gap-1.5 ml-auto">
-          {id === "draft" && sessionLive && (
+          {id === "chat" && sessionLive && (
             <button
               onClick={sendStop}
-              className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[11px] text-stone-700 hover:bg-stone-100"
-              title="stop the agent"
+              className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-red-50 hover:text-red-600"
+              title="stop Claude session"
+              aria-label="stop Claude session"
             >
-              Stop
+              ×
             </button>
           )}
           {id === "draft" && (
             <button
               onClick={sendFinalize}
               disabled={!canFinalize}
-              className="rounded bg-emerald-700 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              className={
+                "rounded px-1.5 py-0.5 disabled:opacity-30 disabled:cursor-not-allowed " +
+                (phase === "finalized"
+                  ? "text-emerald-600"
+                  : "text-stone-400 hover:bg-emerald-50 hover:text-emerald-700")
+              }
               title={
                 phase === "finalized"
-                  ? "already finalized"
+                  ? "already canonical"
                   : wsStatus !== "awaiting_reply"
                     ? "wait for the agent"
                     : scope.kind === "era" && !draft
                       ? "no draft yet"
-                      : "lock the current draft to disk"
+                      : "mark draft as canonical"
               }
+              aria-label="mark draft as canonical"
             >
-              {phase === "finalized" ? "Finalized ✓" : "Finalize"}
+              ✓
             </button>
           )}
           <button
