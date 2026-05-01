@@ -543,6 +543,26 @@ async def session(ws: WebSocket):
                     elif mtype == "finalize":
                         if not turn_task.done():
                             await turn_task
+                        # Samples: lock the draft for the user's own session
+                        # (output.md is in run_dir already) but don't
+                        # promote to the canonical chapters/ path —
+                        # one visitor's iteration shouldn't overwrite
+                        # the corpus's canonical baseline for everyone
+                        # else.
+                        if is_sample_corpus(session_slug):
+                            output_md = run_dir / "output.md"
+                            content = (
+                                output_md.read_text(encoding="utf-8")
+                                if output_md.exists() else ""
+                            )
+                            await send({
+                                "type": "finalized",
+                                "content": content,
+                                "location": str(output_md.relative_to(REPO)),
+                                "words": len(content.split()),
+                                "overwritten": False,
+                            })
+                            continue
                         try:
                             promoted = _promote_era_chapter(run_dir, era, corpus_id)
                         except ValueError as exc:

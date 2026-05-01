@@ -106,11 +106,22 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
 
 @router.get("/themes/latest")
 def get_latest_themes(session: str = Depends(require_corpus_access)):
-    """Return the locked themes.md from the most recent run that has
-    one. Used by the workspace to populate the draft pane in read mode
-    when the user re-enters the themes tab on a corpus with prior runs."""
+    """Return the canonical themes.md for the corpus. Used by the
+    workspace to populate the draft pane in read mode.
+
+    Sample corpora: read from a fixed canonical path (themes/canonical.md)
+    pre-populated when the sample is built. One visitor's /lock writes
+    to their session run dir but never overwrites this canonical view.
+
+    Owned corpora: read from the most recent run dir's themes.md, since
+    the owner's iteration is canonical by definition."""
     corpus_id = _session_corpus_id(session)
     base = _themes_base(corpus_id)
+    if is_sample_corpus(session):
+        canonical = base / "canonical.md"
+        if not canonical.exists():
+            raise HTTPException(404, "no canonical themes for this sample yet")
+        return {"content": canonical.read_text(encoding="utf-8")}
     if not base.exists():
         raise HTTPException(404, "no themes runs yet")
     runs = sorted(
