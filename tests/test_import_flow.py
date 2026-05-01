@@ -208,6 +208,64 @@ def test_import_notes_requires_auth(client: TestClient):
     assert r.status_code == 401, r.text
 
 
+def test_themes_top_n_returns_sample(client: TestClient, auth_token: str):
+    """`/notes/themes-top-n` exercises the lazy import of core.sampling.
+    Regression guard for the package-restructure bug where api/themes.py
+    still did `import spin_themes` after the module moved to cli/ —
+    endpoint 500'd, browser saw it as a CORS error."""
+    zip_bytes = _build_zip({
+        "2020-01-15.md": "long enough body to survive sampling " * 30,
+        "2020-04-15.md": "second pre-nyc entry " * 30,
+        "2021-02-01.md": "first nyc entry " * 30,
+        "2021-08-01.md": "second nyc entry " * 30,
+    })
+    headers_auth = {"X-Auth-Token": auth_token}
+
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=headers_auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+
+    eras_yaml = b"""\
+- name: Pre-NYC
+  start: 2020-01
+- name: NYC
+  start: 2021-01
+"""
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", eras_yaml, "text/yaml")},
+        headers={"X-Corpus-Session": slug, **headers_auth},
+    )
+    assert r.status_code == 200
+
+    # The actual endpoint we want to guard.
+    r = client.get(
+        "/notes/themes-top-n?n=7",
+        headers={"X-Corpus-Session": slug, **headers_auth},
+    )
+    assert r.status_code == 200, r.text
+    notes = r.json()
+    assert isinstance(notes, list)
+    assert len(notes) > 0
+    # Shape mirrors /notes?era=…: each item has rel + date + title + body.
+    for n in notes:
+        assert "rel" in n and "date" in n and "title" in n and "body" in n
+    # Sorted chronologically across eras.
+    dates = [n["date"] for n in notes]
+    assert dates == sorted(dates)
+
+
+def test_themes_top_n_requires_session(client: TestClient, auth_token: str):
+    """No session header → 401, not 500. (The earlier bug's regression
+    surface was a 500 with no CORS header; this also guards the auth gate.)"""
+    r = client.get("/notes/themes-top-n?n=7", headers={"X-Auth-Token": auth_token})
+    assert r.status_code == 401
+
+
 def test_oversized_zip_rejected(client: TestClient, auth_token: str):
     """Zip-bomb defense: huge uncompressed total is rejected before extract."""
     # Build a pathological zip where one member declares enormous file_size.
