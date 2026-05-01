@@ -188,6 +188,7 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
         chunks: list[str] = []
         result_evt: dict | None = None
         proc: asyncio.subprocess.Process | None = None
+        side_tasks: list[asyncio.Task] = []
         try:
             proc = await asyncio.create_subprocess_exec(
                 "claude", "-p",
@@ -202,14 +203,40 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
                 stderr=asyncio.subprocess.PIPE,
                 env=sub_env,
             )
-            assert proc.stdin is not None and proc.stdout is not None
+            assert (
+                proc.stdin is not None
+                and proc.stdout is not None
+                and proc.stderr is not None
+            )
 
             async def feed_stdin():
                 proc.stdin.write(full_user_msg.encode("utf-8"))
                 await proc.stdin.drain()
                 proc.stdin.close()
 
+            async def pipe_stderr():
+                async for raw in proc.stderr:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line:
+                        await send({"type": "log", "text": f"stderr: {line}"})
+
+            async def heartbeat():
+                start = asyncio.get_running_loop().time()
+                while True:
+                    await asyncio.sleep(15)
+                    elapsed = int(asyncio.get_running_loop().time() - start)
+                    streamed = sum(len(c) for c in chunks)
+                    await send({
+                        "type": "log",
+                        "text": (
+                            f"… still working ({elapsed}s elapsed, "
+                            f"{streamed} chars streamed)"
+                        ),
+                    })
+
             stdin_task = asyncio.create_task(feed_stdin())
+            side_tasks.append(asyncio.create_task(pipe_stderr()))
+            side_tasks.append(asyncio.create_task(heartbeat()))
 
             async for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").strip()
@@ -229,6 +256,22 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
                             if text:
                                 chunks.append(text)
                                 await send({"type": "narration", "text": text})
+                elif t == "system":
+                    sub = evt.get("subtype")
+                    if sub == "init":
+                        await send({
+                            "type": "log",
+                            "text": (
+                                f"claude initialized · model="
+                                f"{evt.get('model', '?')} · session="
+                                f"{evt.get('session_id', '?')}"
+                            ),
+                        })
+                    elif sub == "status":
+                        await send({
+                            "type": "log",
+                            "text": f"status · {evt.get('status', '')}",
+                        })
                 elif t == "result":
                     result_evt = evt
 
@@ -240,6 +283,8 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
             await send({"type": "error", "message": f"round-1 failed: {type(e).__name__}: {e}"})
             return
         finally:
+            for tk in side_tasks:
+                tk.cancel()
             # Reap on any exit path (success, exception, or task cancellation
             # from a WS disconnect). Without this, the `claude -p` subprocess
             # outlives the handler and accumulates as orphans.
