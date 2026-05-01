@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { EraTab } from "./EraTab";
 import { HeaderMenu } from "./HeaderMenu";
@@ -63,12 +63,36 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>("");
 
   // Workspace controls live in the global header now (model picker on the
-  // right; era picker centered when viewMode === "eras"). State is lifted
-  // here so it survives chapter remounts and so EraTab + ChatWorkspace
-  // share the same selection.
+  // right; the "Chapters" tab doubles as the era selector dropdown when
+  // active). State is lifted here so it survives chapter remounts and so
+  // EraTab + ChatWorkspace share the same selection.
   const [model, setModel] = useState<(typeof MODELS)[number]>("opus-4.7");
   const [eras, setEras] = useState<Era[]>([]);
   const [selectedEra, setSelectedEra] = useState<string | null>(null);
+  const [chaptersOpen, setChaptersOpen] = useState<boolean>(false);
+  const chaptersMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the chapters dropdown on outside click / Escape.
+  useEffect(() => {
+    if (!chaptersOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (
+        chaptersMenuRef.current &&
+        !chaptersMenuRef.current.contains(e.target as Node)
+      ) {
+        setChaptersOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setChaptersOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [chaptersOpen]);
 
   const reloadEras = useCallback(async () => {
     if (!getSession()) return;
@@ -468,10 +492,13 @@ export default function App() {
             </p>
             <ul className="space-y-2">
               {userCorpora.map(({ slug, title }) => (
-                <li key={slug} className="flex items-stretch gap-1">
+                <li
+                  key={slug}
+                  className="group relative rounded border border-stone-200 bg-white hover:bg-stone-100 transition-colors"
+                >
                   <button
                     onClick={() => handlePickCorpus(slug)}
-                    className="flex-1 text-left rounded border border-stone-200 bg-white px-4 py-3 hover:bg-stone-100"
+                    className="block w-full text-left px-4 py-3"
                   >
                     {title ? (
                       <>
@@ -487,8 +514,11 @@ export default function App() {
                     )}
                   </button>
                   <button
-                    onClick={() => renameCorpus(slug, title)}
-                    className="rounded border border-stone-200 bg-white px-2 text-xs text-stone-500 hover:bg-stone-100 hover:text-stone-700"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      renameCorpus(slug, title);
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-stone-400 underline opacity-0 group-hover:opacity-100 hover:text-stone-700"
                     title="Rename this corpus"
                   >
                     rename
@@ -533,17 +563,70 @@ export default function App() {
               <div className="flex flex-1 items-center gap-4 min-w-0">
                 <h1 className="font-serif text-xl shrink-0">Biographer</h1>
                 <div className="flex items-center gap-1 ml-2">
-                  <button
-                    className={
-                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
-                      (viewMode === "eras"
-                        ? "text-stone-700 border-b-2 border-stone-700"
-                        : "text-stone-400 hover:text-stone-700")
-                    }
-                    onClick={() => setViewMode("eras")}
-                  >
-                    Chapters
-                  </button>
+                  <div className="relative" ref={chaptersMenuRef}>
+                    <button
+                      className={
+                        "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                        (viewMode === "eras"
+                          ? "text-stone-700 border-b-2 border-stone-700"
+                          : "text-stone-400 hover:text-stone-700")
+                      }
+                      onClick={() => {
+                        if (viewMode !== "eras") {
+                          setViewMode("eras");
+                          return;
+                        }
+                        setChaptersOpen((o) => !o);
+                      }}
+                      aria-haspopup={viewMode === "eras" ? "menu" : undefined}
+                      aria-expanded={viewMode === "eras" ? chaptersOpen : undefined}
+                    >
+                      Chapters
+                    </button>
+                    {viewMode === "eras" && chaptersOpen && eras.length > 0 && (
+                      <div
+                        role="menu"
+                        className="absolute left-0 top-full z-20 mt-1 min-w-[20rem] rounded border border-stone-200 bg-white py-1 shadow-md"
+                      >
+                        {eras.map((e) => {
+                          const range = formatEraRange(e.start, e.end);
+                          const disabled = e.note_count === 0;
+                          const active = e.name === selectedEra;
+                          return (
+                            <button
+                              key={e.name}
+                              role="menuitem"
+                              disabled={disabled}
+                              onClick={() => {
+                                setSelectedEra(e.name);
+                                setChaptersOpen(false);
+                              }}
+                              className={
+                                "block w-full px-3 py-1.5 text-left font-serif text-sm transition-colors " +
+                                (disabled
+                                  ? "text-stone-300 cursor-not-allowed"
+                                  : active
+                                    ? "text-stone-900 italic"
+                                    : "text-stone-700 hover:bg-stone-50")
+                              }
+                            >
+                              <span>{e.name}</span>
+                              {range && (
+                                <span className="ml-2 font-sans text-[11px] text-stone-400 not-italic">
+                                  {range}
+                                </span>
+                              )}
+                              {disabled && (
+                                <span className="ml-2 font-sans text-[11px] text-stone-300 not-italic">
+                                  empty
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   <button
                     className={
                       "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
@@ -620,7 +703,6 @@ export default function App() {
               wsBase={WS_BASE}
               eras={eras}
               selectedEra={selectedEra}
-              setSelectedEra={setSelectedEra}
               model={model}
               onChapterFinalized={reloadEras}
             />

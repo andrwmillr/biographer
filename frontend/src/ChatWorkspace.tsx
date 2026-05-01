@@ -29,10 +29,10 @@ type ChatWorkspaceProps = {
   // refetch the era list so chapter date ranges update after a draft is
   // promoted.
   onFinalized?: (info: FinalizedInfo) => void;
-  // Optional content rendered next to the "NOTES" label in the Notes
-  // pane header. Used by the chapters tab to host the chapter picker
-  // (eras tab fills it; themes leaves it null).
-  notesHeaderSlot?: ReactNode;
+  // Optional content rendered centered in the Draft pane header — used
+  // by the chapters tab to label the pane with the active chapter's
+  // name. Themes leaves it null.
+  draftHeaderSlot?: ReactNode;
 };
 
 type WSStatus =
@@ -75,7 +75,7 @@ export function ChatWorkspace({
   scope,
   model,
   onFinalized,
-  notesHeaderSlot,
+  draftHeaderSlot,
 }: ChatWorkspaceProps) {
   const [phase, setPhase] = useState<Phase>("pre-gen");
 
@@ -866,7 +866,7 @@ export function ChatWorkspace({
   function PaneHeader({ id, popped = false }: { id: PaneId; popped?: boolean }) {
     const isCollapsed = collapsed[id];
     const showCenterSlot =
-      id === "notes" && notesHeaderSlot && !popped && !isCollapsed;
+      id === "draft" && draftHeaderSlot && !popped && !isCollapsed;
     return (
       <div className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
         <span
@@ -894,7 +894,7 @@ export function ChatWorkspace({
         </span>
         {showCenterSlot && (
           <div className="flex items-center justify-center min-w-0">
-            {notesHeaderSlot}
+            {draftHeaderSlot}
           </div>
         )}
         <div
