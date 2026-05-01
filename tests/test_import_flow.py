@@ -266,6 +266,71 @@ def test_themes_top_n_requires_session(client: TestClient, auth_token: str):
     assert r.status_code == 401
 
 
+def test_delete_account_removes_everything(client: TestClient):
+    """`/auth/delete-account` must wipe the user's corpora, drop the
+    user record, kill all their sessions, and clear pending magic-link
+    tokens. Idempotent / irreversible — no grace period."""
+    # Use a dedicated email so we don't collide with other tests' state.
+    email = "delete-me@test.local"
+    token = _issue_test_token(email=email)
+    headers_auth = {"X-Auth-Token": token}
+
+    # 1. Import a corpus to give the user something to delete.
+    zip_bytes = _build_zip({
+        "2020-01-15.md": "to be deleted",
+        "2020-04-15.md": "also to be deleted",
+    })
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=headers_auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    assert (_test_corpora_root / slug).exists()
+
+    # 2. Plant a second active session for the same user — should also die.
+    second_token = _issue_test_token(email=email)
+    state = auth._load_auth()
+    assert second_token in state["sessions"]
+    # And a pending magic-link record so we exercise that path too.
+    state["pending"]["fakemagic"] = {
+        "email": email,
+        "return_url": "http://localhost:5173/",
+        "expires": auth._now_ts() + 600,
+    }
+    auth._save_auth(state)
+
+    # 3. Hit the endpoint with the original token.
+    r = client.post("/auth/delete-account", headers=headers_auth)
+    assert r.status_code == 200, r.text
+    summary = r.json()
+    assert summary["corpora_deleted"] == 1
+    # Two sessions for this user (token + second_token) — both killed.
+    assert summary["sessions_invalidated"] == 2
+    assert summary["pending_links_invalidated"] == 1
+
+    # 4. Verify the corpus tree is gone.
+    assert not (_test_corpora_root / slug).exists()
+
+    # 5. Verify the user record is gone and tokens no longer authenticate.
+    state = auth._load_auth()
+    assert email not in state["users"]
+    assert token not in state["sessions"]
+    assert second_token not in state["sessions"]
+    assert "fakemagic" not in state["pending"]
+
+    # 6. The token should now be rejected by /auth/me.
+    r = client.get("/auth/me", headers=headers_auth)
+    assert r.status_code == 401
+
+
+def test_delete_account_requires_auth(client: TestClient):
+    """No token → 401, not silent success."""
+    r = client.post("/auth/delete-account")
+    assert r.status_code == 401
+
+
 def test_parse_note_body_rejects_path_traversal():
     """`parse_note_body(rel)` must refuse `rel` strings that escape the
     notes dir. The on-disk check defends against any future endpoint

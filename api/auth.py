@@ -231,3 +231,50 @@ def auth_logout(x_auth_token: str | None = Header(None)):
     state = _load_auth()
     state["sessions"].pop(x_auth_token, None)
     _save_auth(state)
+
+
+@router.post("/auth/delete-account")
+def auth_delete_account(email: str = Depends(get_auth)):
+    """Irreversibly delete every trace of the authenticated user:
+    every owned corpus directory, the user's auth record, all of their
+    active sessions, and any pending magic-link tokens issued to them.
+
+    This is the GDPR right-to-erasure endpoint — no soft-delete, no grace
+    period. Returns a count summary so the client can confirm the scope
+    of what was removed."""
+    import shutil
+
+    state = _load_auth()
+    owned_slugs = list(state["users"].get(email, []))
+
+    # 1. Delete each corpus directory tree.
+    deleted = 0
+    for slug in owned_slugs:
+        corpus_path = config.CORPORA_ROOT / slug
+        if corpus_path.exists():
+            shutil.rmtree(corpus_path, ignore_errors=True)
+            deleted += 1
+
+    # 2. Drop the user's record (their list of owned slugs).
+    state["users"].pop(email, None)
+
+    # 3. Invalidate every session belonging to this email.
+    sessions_killed = 0
+    for token, record in list(state["sessions"].items()):
+        if record.get("email") == email:
+            state["sessions"].pop(token, None)
+            sessions_killed += 1
+
+    # 4. Clear any pending magic-link tokens issued to this email.
+    pending_killed = 0
+    for token, record in list(state["pending"].items()):
+        if record.get("email") == email:
+            state["pending"].pop(token, None)
+            pending_killed += 1
+
+    _save_auth(state)
+    return {
+        "corpora_deleted": deleted,
+        "sessions_invalidated": sessions_killed,
+        "pending_links_invalidated": pending_killed,
+    }

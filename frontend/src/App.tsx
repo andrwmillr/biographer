@@ -212,6 +212,41 @@ export default function App() {
     }
   }
 
+  // Irreversible: wipes every owned corpus + the user's auth record.
+  // Two-prompt confirmation (warning + email re-entry) to make
+  // misclicks unlikely.
+  async function handleDeleteAccount() {
+    if (!userEmail) return;
+    const confirmed = window.confirm(
+      `Permanently delete your account?\n\n` +
+        `This irreversibly wipes every corpus you own (${userCorpora.length}) ` +
+        `and removes your account record. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    const typed = window.prompt(`Type your email (${userEmail}) to confirm:`);
+    if (typed?.trim().toLowerCase() !== userEmail.toLowerCase()) {
+      setError("Account deletion cancelled — email did not match.");
+      return;
+    }
+    try {
+      const r = await fetch(`${API_BASE}/auth/delete-account`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      clearAuthToken();
+      clearSession();
+      setCorpusInfo(null);
+      setUserEmail(null);
+      setUserCorpora([]);
+      setLoginSent(false);
+      setLoginEmail("");
+      setCorpusMode("login");
+    } catch (err) {
+      setError(`delete failed: ${(err as Error).message}`);
+    }
+  }
+
   // Card-list of sample corpora — anonymous-readable, low-friction explore
   // path. Rendered on both the login and picker screens.
   function renderSamples(label: string) {
@@ -422,6 +457,7 @@ export default function App() {
                   }}
                   onSwitchCorpus={handleSwitchCorpus}
                   onLogout={handleLogout}
+                  onDeleteAccount={handleDeleteAccount}
                 />
               </div>
             </div>

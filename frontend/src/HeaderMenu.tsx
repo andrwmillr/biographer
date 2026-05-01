@@ -6,6 +6,7 @@ type HeaderMenuProps = {
   onWipe: () => void;
   onSwitchCorpus: () => void;
   onLogout: () => void;
+  onDeleteAccount: () => void;
 };
 
 export function HeaderMenu({
@@ -14,6 +15,7 @@ export function HeaderMenu({
   onWipe,
   onSwitchCorpus,
   onLogout,
+  onDeleteAccount,
 }: HeaderMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -107,6 +109,18 @@ export function HeaderMenu({
               role="menuitem"
             >
               Wipe corpus
+            </button>
+          )}
+          {!!userEmail && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                onDeleteAccount();
+              }}
+              className="block w-full px-3 py-1.5 text-left text-xs text-stone-500 hover:bg-stone-50 hover:text-red-600"
+              role="menuitem"
+            >
+              Delete account
             </button>
           )}
         </div>
