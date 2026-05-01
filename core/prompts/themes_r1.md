@@ -14,6 +14,16 @@ For each theme, commit a self-scoped list of 8-10 dated notes from the sample �
 
 Aim for a mix: some themes about the *form* (how the writing moves — drafting, addressing the page, organizing by place); some about *recurring subjects* (what it keeps coming back to — types of people, kinds of regret). Don't let the list collapse onto one axis.
 
+## PROCESS
+
+The user is watching this run live and the silence between turns is hard to read. Before drafting any theme content, call **TodoWrite** with one item per planned theme — use rough working names; you can refine them when you write the block. This gives the user a visible plan within seconds. Then work the list:
+
+- Mark a todo `in_progress` *before* you start emitting that theme's block.
+- Mark it `completed` *after* the block is done.
+- If you discover a duplicate or want to merge two themes mid-draft, edit the todo list to reflect the new shape — don't leave stale items.
+
+Exactly one item should be `in_progress` at a time. The todo updates are how the user knows you're still working between blocks.
+
 ## WHAT MAKES A THEME
 
 - **A shape, not a subject.** "Girls", "weed", "self-regulation" are subjects. A theme is the *pattern* — what the writing keeps doing.
