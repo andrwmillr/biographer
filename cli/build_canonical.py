@@ -22,6 +22,7 @@ What it does, per corpus:
 All claude -p calls scrub ANTHROPIC_API_KEY so they use the user's
 subscription credits, not the API account.
 """
+import json
 import os
 import subprocess
 import sys
@@ -50,25 +51,54 @@ def log(msg: str) -> None:
 
 def claude_p(system_prompt: str, user_msg: str) -> str:
     """Run `claude -p` with the given system prompt + user message via
-    stdin. Returns stdout text. ANTHROPIC_API_KEY is scrubbed so the
-    subscription path is used."""
+    stdin. Uses --output-format stream-json so we can reliably capture
+    text content via content_block_delta events (plain claude -p stdout
+    is unreliable for large prompts). ANTHROPIC_API_KEY is scrubbed so
+    the subscription path is used."""
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [
             "claude", "-p",
             "--model", MODEL,
             "--system-prompt", system_prompt,
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
             "--no-session-persistence",
         ],
-        input=user_msg,
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
         env=env,
     )
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr or "")
-        sys.exit(result.returncode)
-    return result.stdout
+    proc.stdin.write(user_msg)
+    proc.stdin.close()
+
+    chunks: list[str] = []
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("type") == "stream_event":
+            inner = evt.get("event", {})
+            if inner.get("type") == "content_block_delta":
+                delta = inner.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        chunks.append(text)
+
+    proc.wait()
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr.read() or "")
+        sys.exit(proc.returncode)
+    return "".join(chunks)
 
 
 def build_chapter(corpus_id: str, era_name: str, era_notes: list, by_era: dict) -> None:
@@ -89,6 +119,24 @@ def build_chapter(corpus_id: str, era_name: str, era_notes: list, by_era: dict) 
         parts.append("--- END PRIOR CHAPTERS ---\n\n")
     parts.append(era_msg)
     user_msg = "".join(parts)
+
+    # CHAPTER_SYSTEM is tuned for the SDK interactive flow (with checkpoints,
+    # narration, tool calls). In a one-shot claude -p context the agent
+    # otherwise tends to emit a meta-preamble ("I'll read this and draft…")
+    # or fall into thread-digest format on small eras. Override via the user
+    # message: chapter prose only.
+    user_msg = (
+        user_msg
+        + "\n\n--- ONE-SHOT INSTRUCTIONS ---\n\n"
+        "This is a one-shot non-interactive run. You have NO tools available "
+        "(no Write, no Edit, no Read). Do not attempt tool calls.\n\n"
+        "Output ONLY the chapter prose — what would appear in the printed "
+        "book. No preamble, no narration about your process, no checkpoints, "
+        "no 'I'll draft this in a single pass' meta. No thread-digest "
+        "format (no '## Subject framing', '## Threads', '## People', "
+        "'## Picked up from earlier', '## Open / unresolved' headings). "
+        "Just the chapter, ready to drop into the retrospective."
+    )
 
     log(f"  era '{era_name}': {len(era_notes)} notes, {len(user_msg):,} chars in")
     text = claude_p(wb.CHAPTER_SYSTEM, user_msg).strip()
@@ -126,11 +174,17 @@ def build_themes(corpus_id: str) -> None:
     # Auto-curate: round-1 → ~5 final themes.
     log("  themes auto-curate: collapsing to ~5 final themes")
     curate_msg = (
-        "Below is a round-1 themes list. Curate this down to 5 final themes — "
-        "merge duplicates, drop weak candidates, refine names. Output ONLY the "
-        "LOCKED THEMES block in the format from your system prompt's LOCKING "
-        "section (no `## Current state` block, no interactive moves, no "
-        "preamble). Be decisive.\n\n"
+        "This is a one-shot non-interactive run. You have NO tools available "
+        "(no Write, no Edit, no Read). Do not attempt to call them — write "
+        "directly to your text response.\n\n"
+        "Below is a round-1 themes list. Curate down to 5 final themes — "
+        "merge duplicates, drop weak candidates, refine names. Output ONLY "
+        "the LOCKED THEMES block (the body that would normally go inside "
+        "themes.md), in the format from your system prompt's LOCKING "
+        "section. Do NOT emit `## Current state`, do NOT emit "
+        "`[locked] wrote themes.md.` (you have no Write tool — there's "
+        "nothing to write to), do NOT preamble. Just the themes. Be "
+        "decisive.\n\n"
         "--- ROUND-1 THEMES ---\n\n"
         f"{round1}\n\n"
         "--- END ROUND-1 ---\n"
