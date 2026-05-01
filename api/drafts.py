@@ -301,11 +301,7 @@ async def draft(req: DraftRequest, session: str = Depends(require_writable)):
 
 
 @router.websocket("/session")
-async def session(
-    ws: WebSocket,
-    session: str | None = None,
-    auth: str | None = None,
-):
+async def session(ws: WebSocket):
     await ws.accept()
     tasks: list[asyncio.Task] = []
     run_dir: Path | None = None
@@ -324,11 +320,23 @@ async def session(
         except Exception:
             pass
 
-    if not session:
-        await reject("missing ?session= query param")
+    # Auth + intent in the first message body (not the URL) so tokens
+    # never appear in access logs / browser history / proxy logs.
+    try:
+        first = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+    if first.get("type") != "start" or not first.get("era"):
+        await reject("first message must be {type:'start', era, session, token}")
+        return
+
+    session_slug = first.get("session")
+    auth_token = first.get("token")
+    if not session_slug:
+        await reject("missing session in start message")
         return
     try:
-        corpus_dir(session)
+        corpus_dir(session_slug)
     except HTTPException as e:
         await reject(e.detail)
         return
@@ -336,26 +344,21 @@ async def session(
     # Samples are open to anonymous visitors so demos work without an account
     # — note that drafts spawn a Claude subprocess on the host's dime and
     # writes (run dirs, finalize) mutate the sample's own corpus tree.
-    if not is_sample_corpus(session):
-        if not auth:
-            await reject("auth required: missing ?auth= query param")
+    if not is_sample_corpus(session_slug):
+        if not auth_token:
+            await reject("auth required: missing token in start message")
             return
         state = _gc_auth(_load_auth())
-        record = state["sessions"].get(auth)
+        record = state["sessions"].get(auth_token)
         if not record:
             await reject("invalid or expired auth token")
             return
-        if session not in state["users"].get(record["email"], []):
+        if session_slug not in state["users"].get(record["email"], []):
             await reject("this corpus is not owned by the authenticated user")
             return
-    corpus_id = _session_corpus_id(session)
+    corpus_id = _session_corpus_id(session_slug)
 
     try:
-        first = await ws.receive_json()
-        if first.get("type") != "start" or not first.get("era"):
-            await send({"type": "error", "message": "first message must be {type:'start', era}"})
-            return
-
         era = first["era"]
         try:
             inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))

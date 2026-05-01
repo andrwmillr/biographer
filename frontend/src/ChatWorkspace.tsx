@@ -225,18 +225,18 @@ export function ChatWorkspace({
     setWsStatus("connecting");
 
     const wsPath = scope.kind === "era" ? "/session" : "/themes-curate";
-    const ws = new WebSocket(
-      `${wsBase}${wsPath}` +
-        `?session=${encodeURIComponent(getSession() || "")}` +
-        `&auth=${encodeURIComponent(getAuthToken() || "")}`,
-    );
+    // Auth + session travel in the first message body, not the URL —
+    // keeps tokens out of access logs / browser history / proxy logs.
+    const ws = new WebSocket(`${wsBase}${wsPath}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      const session = getSession() || "";
+      const token = getAuthToken() || "";
       const startMsg =
         scope.kind === "era"
-          ? { type: "start", era: scope.era, future, model }
-          : { type: "start", top_n: topN, model };
+          ? { type: "start", session, token, era: scope.era, future, model }
+          : { type: "start", session, token, top_n: topN, model };
       ws.send(JSON.stringify(startMsg));
     };
 
@@ -405,7 +405,12 @@ export function ChatWorkspace({
           ? "awaiting_reply"
           : "generating";
 
-  function Prompter() {
+  // Called as `{renderPrompter()}` rather than `<Prompter />`. Declaring this
+  // as a component would give it a fresh function identity on every render of
+  // ChatWorkspace, so React's reconciler would unmount/remount the textarea
+  // on every keystroke — focus drops after the first character. As a plain
+  // function it inlines into the parent's JSX tree and the textarea persists.
+  function renderPrompter() {
     const enabled = promptStatus === "awaiting_reply";
     const buttonEnabled =
       promptStatus === "pre-gen" ||
@@ -600,7 +605,7 @@ export function ChatWorkspace({
               <span className="text-stone-400">not started</span>
             )}
           </div>
-          <Prompter />
+          {renderPrompter()}
         </div>
       </div>
     );
