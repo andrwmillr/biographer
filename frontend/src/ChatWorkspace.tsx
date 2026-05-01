@@ -116,11 +116,13 @@ export function ChatWorkspace({
   // Tier 2.5 resume: remember the run_dir of the in-flight session so
   // we can reconnect with `resume: true, run_id: …` if the WS dies
   // (tab put to sleep, network blip, etc.). Keyed in localStorage by
-  // workflow + scope so era and themes don't collide.
+  // corpus + workflow + scope so different corpora and eras don't
+  // collide (e.g. two corpora that share an era name).
+  const corpusSlug = getSession() || "";
   const runIdStorageKey =
     scope.kind === "era"
-      ? `workspace_run_era_${scope.era}`
-      : `workspace_run_themes_default`;
+      ? `workspace_run_${corpusSlug}_era_${scope.era}`
+      : `workspace_run_${corpusSlug}_themes_default`;
   const runIdRef = useRef<string | null>(
     typeof window !== "undefined"
       ? window.localStorage.getItem(runIdStorageKey)
