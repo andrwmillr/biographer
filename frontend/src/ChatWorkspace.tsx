@@ -485,7 +485,7 @@ export function ChatWorkspace({
     const placeholder =
       promptStatus === "pre-gen"
         ? scope.kind === "era"
-          ? "Press ▶ to start drafting this era. The agent reads notes, drafts, then opens the chat."
+          ? "Press ▶ to start drafting this chapter. The agent reads notes, drafts, then opens the chat."
           : "Press ▶ to surface the top recurring threads. The agent reads notes, sketches candidates, then opens the chat."
         : promptStatus === "generating"
           ? "thinking…"

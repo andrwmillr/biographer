@@ -10,7 +10,7 @@ export type Note = {
 
 export type Era = {
   name: string;
-  start: string;
+  start: string | null;
   end: string | null;
   note_count: number;
   has_chapter: boolean;

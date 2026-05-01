@@ -12,6 +12,8 @@ export default defineConfig({
       "/corpus": "http://localhost:8000",
       "/eras": "http://localhost:8000",
       "/notes": "http://localhost:8000",
+      "/chapters": "http://localhost:8000",
+      "/themes/latest": "http://localhost:8000",
       "/import": "http://localhost:8000",
       "/draft": "http://localhost:8000",
       "/promote": "http://localhost:8000",

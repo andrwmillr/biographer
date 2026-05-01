@@ -3,6 +3,25 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { authHeaders } from "./auth";
 import type { Era } from "./types";
 
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function formatYearMonth(ym: string | null | undefined): string {
+  if (!ym || ym === "9999-99") return "";
+  const [y, m] = ym.split("-").map(Number);
+  if (!y || !m || m < 1 || m > 12) return ym;
+  return `${MONTHS[m - 1]} ${y}`;
+}
+
+function formatRange(start: string | null, end: string | null): string {
+  const s = formatYearMonth(start);
+  const e = formatYearMonth(end) || "present";
+  if (!s) return "";
+  return `${s} – ${e}`;
+}
+
 type EraTabProps = {
   apiBase: string;
   wsBase: string;
@@ -76,17 +95,17 @@ export function EraTab({ apiBase, wsBase }: EraTabProps) {
         onChange={(e) => setSelectedEra(e.target.value)}
         title="Select era"
       >
-        {eras.map((e) => (
-          <option key={e.name} value={e.name} disabled={e.note_count === 0}>
-            {e.name}
-            {e.has_chapter ? " ✓" : ""}
-            {e.note_count === 0 ? " (empty)" : ""}
-          </option>
-        ))}
+        {eras.map((e) => {
+          const range = formatRange(e.start, e.end);
+          return (
+            <option key={e.name} value={e.name} disabled={e.note_count === 0}>
+              {e.name}
+              {range ? ` (${range})` : ""}
+              {e.note_count === 0 ? " (empty)" : ""}
+            </option>
+          );
+        })}
       </select>
-      <span className="text-xs text-stone-500 tabular-nums">
-        {era.note_count} notes
-      </span>
     </div>
   );
 

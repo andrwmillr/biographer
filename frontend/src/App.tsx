@@ -423,7 +423,7 @@ export default function App() {
                   }
                   onClick={() => setViewMode("eras")}
                 >
-                  Eras
+                  Chapters
                 </button>
                 <button
                   className={
@@ -439,16 +439,18 @@ export default function App() {
               </div>
               <div className="ml-auto flex items-center gap-3">
                 {(corpusInfo.title || corpusInfo.slug) && (
-                  <span
-                    className="max-w-[40ch] truncate border-[3px] border-double border-stone-300 px-3 py-0.5 font-serif italic text-base text-stone-600"
+                  <button
+                    type="button"
+                    onClick={handleSwitchCorpus}
+                    className="max-w-[40ch] truncate border-[3px] border-double border-stone-300 px-3 py-0.5 font-serif italic text-base text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-800"
                     style={{
                       backgroundColor: "rgba(120, 113, 108, 0.04)",
                       boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
                     }}
-                    title={corpusInfo.title || corpusInfo.slug}
+                    title={`${corpusInfo.title || corpusInfo.slug} — click to switch corpus`}
                   >
                     {corpusInfo.title || corpusInfo.slug}
-                  </span>
+                  </button>
                 )}
                 <HeaderMenu
                   isSample={corpusInfo.is_sample}
@@ -467,7 +469,6 @@ export default function App() {
                       setError(`wipe failed: ${(err as Error).message}`);
                     }
                   }}
-                  onSwitchCorpus={handleSwitchCorpus}
                   onLogout={handleLogout}
                   onDeleteAccount={handleDeleteAccount}
                 />

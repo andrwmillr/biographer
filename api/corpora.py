@@ -147,11 +147,19 @@ def list_eras(session: str = Depends(require_corpus_access)):
     out = []
     for name, start, end in eras:
         chapter_path = chapters / f"{wb.era_slug(name)}.md"
+        # Derive the displayed range from the actual notes when possible —
+        # YAML boundaries can be sentinels ("0000-00", "9999-99") that
+        # render badly in the UI. Fall back to the YAML range when an era
+        # has no notes yet.
+        notes_in_era = by_era[name]
+        actual_lo, actual_hi = wb.era_date_range(notes_in_era)
+        display_start = actual_lo or (start if start != "0000-00" else None)
+        display_end = actual_hi or (end if end != "9999-99" else None)
         out.append({
             "name": name,
-            "start": start,
-            "end": end if end != "9999-99" else None,
-            "note_count": len(by_era[name]),
+            "start": display_start,
+            "end": display_end,
+            "note_count": len(notes_in_era),
             "has_chapter": chapter_path.exists(),
         })
     return out

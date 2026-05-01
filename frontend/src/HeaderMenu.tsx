@@ -4,7 +4,6 @@ type HeaderMenuProps = {
   isSample?: boolean;
   userEmail: string | null;
   onWipe: () => void;
-  onSwitchCorpus: () => void;
   onLogout: () => void;
   onDeleteAccount: () => void;
 };
@@ -13,7 +12,6 @@ export function HeaderMenu({
   isSample = false,
   userEmail,
   onWipe,
-  onSwitchCorpus,
   onLogout,
   onDeleteAccount,
 }: HeaderMenuProps) {
@@ -38,14 +36,11 @@ export function HeaderMenu({
     };
   }, [open]);
 
-  // Samples are read-only — wipe is a 403 there. Show "Switch" whenever the
-  // user has somewhere to go: any signed-in user (the picker lists owned
-  // corpora + samples), or anon viewing a sample (route to login + samples).
+  // Samples are read-only — wipe is a 403 there. Switch-corpus moved to the
+  // clickable corpus tag in the header (App.tsx).
   const showWipe = !isSample;
-  const showSwitch = !!userEmail || isSample;
   const showLogout = !!userEmail;
-  const switchLabel = isSample && !userEmail ? "Browse other samples" : "Switch corpus";
-  if (!showWipe && !showSwitch && !showLogout) return null;
+  if (!showWipe && !showLogout) return null;
 
   return (
     <div className="relative" ref={ref}>
@@ -72,18 +67,6 @@ export function HeaderMenu({
               {userEmail}
             </div>
           )}
-          {showSwitch && (
-            <button
-              onClick={() => {
-                setOpen(false);
-                onSwitchCorpus();
-              }}
-              className="block w-full px-3 py-1.5 text-left text-xs text-stone-700 hover:bg-stone-50"
-              role="menuitem"
-            >
-              {switchLabel}
-            </button>
-          )}
           {showLogout && (
             <button
               onClick={() => {
@@ -95,9 +78,6 @@ export function HeaderMenu({
             >
               Sign out
             </button>
-          )}
-          {showWipe && (showSwitch || showLogout) && (
-            <div className="my-1 border-t border-stone-100" />
           )}
           {showWipe && (
             <button
