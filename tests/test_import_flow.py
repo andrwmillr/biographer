@@ -266,6 +266,40 @@ def test_themes_top_n_requires_session(client: TestClient, auth_token: str):
     assert r.status_code == 401
 
 
+def test_parse_note_body_rejects_path_traversal():
+    """`parse_note_body(rel)` must refuse `rel` strings that escape the
+    notes dir. The on-disk check defends against any future endpoint
+    that lets users supply rel directly (current callers all source rel
+    from corpus state, but defense-in-depth)."""
+    # Plant a "secret" file outside the test notes dir.
+    secret = _test_corpora_root / "andrew" / "_auth" / "secret.txt"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text("THIS-SHOULD-NEVER-BE-READ")
+
+    # Plant a real note under notes/ with the same content for comparison.
+    notes_dir = _test_corpora_root / "andrew" / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    real_note = notes_dir / "ok.md"
+    real_note.write_text("real note body")
+
+    # Sanity: legit rel reads correctly.
+    assert wb.parse_note_body("ok.md", corpus_id="andrew") == "real note body"
+
+    # Traversal attempts must return "" (not the secret).
+    for malicious in [
+        "../_auth/secret.txt",
+        "../../_auth/secret.txt",
+        "/etc/passwd",
+        "../../../../../../../etc/passwd",
+        "subdir/../../_auth/secret.txt",
+    ]:
+        body = wb.parse_note_body(malicious, corpus_id="andrew")
+        assert "THIS-SHOULD-NEVER-BE-READ" not in body, (
+            f"path traversal succeeded for rel={malicious!r}"
+        )
+        assert body == "", f"expected empty for rel={malicious!r}, got {body!r}"
+
+
 def test_oversized_zip_rejected(client: TestClient, auth_token: str):
     """Zip-bomb defense: huge uncompressed total is rejected before extract."""
     # Build a pathological zip where one member declares enormous file_size.

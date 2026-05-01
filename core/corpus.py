@@ -237,8 +237,32 @@ TOTAL_CHAR_CAP = 700_000
 MIN_PER_NOTE = 400
 
 
+def _safe_note_path(rel, corpus_id=None):
+    """Return the absolute path for note `rel` inside the corpus's notes
+    dir, defending against path traversal (e.g. rel='../../_auth/state.json').
+    Returns None if the resolved path escapes the notes dir or `rel`
+    is empty/absolute.
+
+    `_extract_zip_safe` already blocks malicious paths at upload time,
+    but this is a belt-and-suspenders check on the read side: any future
+    endpoint that takes a user-supplied `rel` and feeds it through
+    `parse_note_body` is automatically defended."""
+    if not rel or Path(rel).is_absolute():
+        return None
+    notes_dir = _corpus_paths(corpus_id)["notes"].resolve()
+    try:
+        candidate = (notes_dir / rel).resolve()
+    except (OSError, ValueError):
+        return None
+    if not candidate.is_relative_to(notes_dir):
+        return None
+    return candidate
+
+
 def parse_note_body(rel, corpus_id=None):
-    path = _corpus_paths(corpus_id)["notes"] / rel
+    path = _safe_note_path(rel, corpus_id)
+    if path is None:
+        return ""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:

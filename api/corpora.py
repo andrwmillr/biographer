@@ -122,7 +122,9 @@ def _load_state(corpus_id: str = "andrew"):
 
 
 def _note_source(rel: str, corpus_id: str = "andrew") -> str:
-    path = wb._corpus_paths(corpus_id)["notes"] / rel
+    path = wb._safe_note_path(rel, corpus_id)
+    if path is None:
+        return ""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
