@@ -101,72 +101,69 @@ export function ImportFlow({
 
   if (step === "notes") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50">
-        <div className="max-w-md w-full p-8">
-          <h1 className="font-serif text-2xl mb-2">Biographer</h1>
-          <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-            Upload a zip of your notes (e.g.{" "}
-            <code className="bg-stone-100 px-1 rounded text-xs">.md</code> or{" "}
-            <code className="bg-stone-100 px-1 rounded text-xs">.txt</code>{" "}
-            files) to import a corpus. Each browser sees only the corpus it
-            imports. Files live on the host's machine.
-          </p>
-          <label className="block">
-            <span className="text-sm font-medium text-stone-700">
-              Notes (.zip)
-            </span>
-            <input
-              type="file"
-              name="notes-zip"
-              accept=".zip,application/zip"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleNotesUpload(file);
-              }}
-              className="mt-2 block w-full text-sm text-stone-700"
-            />
-          </label>
-          {error && <p className="mt-4 text-red-600 text-sm">{error}</p>}
-        </div>
+      <div>
+        <h2 className="font-serif text-lg text-stone-900">
+          Upload your notes
+        </h2>
+        <p className="mt-1 mb-4 text-stone-600 text-sm leading-relaxed">
+          Drop a zip of{" "}
+          <code className="bg-stone-100 px-1 rounded text-xs">.md</code> or{" "}
+          <code className="bg-stone-100 px-1 rounded text-xs">.txt</code>{" "}
+          files to import a corpus. Files live on the host's machine.
+        </p>
+        <label className="block">
+          <span className="text-sm font-medium text-stone-700">
+            Notes (.zip)
+          </span>
+          <input
+            type="file"
+            name="notes-zip"
+            accept=".zip,application/zip"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleNotesUpload(file);
+            }}
+            className="mt-2 block w-full text-sm text-stone-700"
+          />
+        </label>
+        {error && <p className="mt-4 text-red-600 text-sm">{error}</p>}
       </div>
     );
   }
 
   // step === "eras"
   return (
-    <div className="min-h-screen flex items-center justify-center bg-stone-50">
-      <div className="max-w-md w-full p-8">
-        <h1 className="font-serif text-2xl mb-2">One more step</h1>
-        <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-          {info?.note_count ?? 0} notes uploaded. Now provide an{" "}
-          <code className="bg-stone-100 px-1 rounded text-xs">eras.yaml</code>{" "}
-          defining the era boundaries for this corpus.
-        </p>
-        <label className="block">
-          <span className="text-sm font-medium text-stone-700">eras.yaml</span>
-          <input
-            type="file"
-            name="eras-yaml"
-            accept=".yaml,.yml,application/x-yaml,text/yaml,text/plain"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleErasUpload(file);
-            }}
-            className="mt-2 block w-full text-sm text-stone-700"
-          />
-        </label>
-        {error && <p className="mt-4 text-red-600 text-sm">{error}</p>}
-        <button
-          onClick={() => {
-            if (window.confirm("Discard the uploaded notes and start over?")) {
-              onWipe();
-            }
+    <div>
+      <h2 className="font-serif text-lg text-stone-900">One more step</h2>
+      <p className="mt-1 mb-4 text-stone-600 text-sm leading-relaxed">
+        {info?.note_count ?? 0} notes uploaded. Now provide an{" "}
+        <code className="bg-stone-100 px-1 rounded text-xs">eras.yaml</code>{" "}
+        defining the era boundaries for this corpus.
+      </p>
+      <label className="block">
+        <span className="text-sm font-medium text-stone-700">eras.yaml</span>
+        <input
+          type="file"
+          name="eras-yaml"
+          accept=".yaml,.yml,application/x-yaml,text/yaml,text/plain"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleErasUpload(file);
           }}
-          className="mt-6 text-xs text-stone-500 hover:text-stone-700 underline"
-        >
-          Cancel and discard
-        </button>
-      </div>
+          className="mt-2 block w-full text-sm text-stone-700"
+        />
+      </label>
+      {error && <p className="mt-4 text-red-600 text-sm">{error}</p>}
+      <button
+        onClick={() => {
+          if (window.confirm("Discard the uploaded notes and start over?")) {
+            onWipe();
+          }
+        }}
+        className="mt-6 text-xs text-stone-500 hover:text-stone-700 underline"
+      >
+        Cancel and discard
+      </button>
     </div>
   );
 }

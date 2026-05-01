@@ -545,16 +545,54 @@ export default function App() {
         </div>
       )}
       {corpusMode === "import" && (
-        <ImportFlow
-          key={corpusInfo?.slug ?? "fresh"}
-          apiBase={API_BASE}
-          initialInfo={corpusInfo}
-          onComplete={(info) => {
-            setCorpusInfo(info);
-            setCorpusMode("ready");
-          }}
-          onWipe={handleWipe}
-        />
+        <div className="min-h-screen flex items-start justify-center bg-stone-50 py-16">
+          <div className="max-w-md w-full p-8">
+            <h1 className="font-serif text-2xl mb-2">
+              {userEmail ? "Welcome back" : "Biographer"}
+            </h1>
+            {userEmail ? (
+              <p className="text-stone-600 mb-6 text-sm leading-relaxed">
+                Signed in as{" "}
+                <span className="font-mono text-xs">{userEmail}</span>. Import
+                your own notes below, or browse a sample diary.
+              </p>
+            ) : (
+              <p className="text-stone-600 mb-6 text-sm leading-relaxed">
+                Each browser sees only the corpus it imports. Files live on
+                the host's machine.
+              </p>
+            )}
+            <ImportFlow
+              key={corpusInfo?.slug ?? "fresh"}
+              apiBase={API_BASE}
+              initialInfo={corpusInfo}
+              onComplete={(info) => {
+                setCorpusInfo(info);
+                setCorpusMode("ready");
+              }}
+              onWipe={handleWipe}
+            />
+            {userEmail && (
+              <div className="mt-6 flex items-center gap-4">
+                {userCorpora.length > 0 && (
+                  <button
+                    onClick={() => setCorpusMode("picker")}
+                    className="text-sm text-stone-700 underline hover:text-stone-900"
+                  >
+                    ← Back to my corpora
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="ml-auto text-xs text-stone-500 hover:text-stone-700 underline"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+            {renderSamples("Sample diaries")}
+          </div>
+        </div>
       )}
       {corpusMode === "ready" && corpusInfo && (
         <div className="min-h-full">
