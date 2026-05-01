@@ -165,8 +165,11 @@ export function ChatWorkspace({
       })
       .then((data) => {
         if (cancelled || !data?.content) return;
+        // Populate the draft pane so the user can read what's already
+        // locked, but leave phase at "pre-gen" so the prompter stays
+        // active — clicking Start kicks off a fresh session that will
+        // overwrite this view with new content.
         setDraft(data.content);
-        setPhase("finalized");
       })
       .catch(() => {});
     return () => {
