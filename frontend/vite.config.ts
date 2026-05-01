@@ -18,6 +18,7 @@ export default defineConfig({
       "/samples": "http://localhost:8000",
       "/themes-spin": "http://localhost:8000",
       "/session": { target: "ws://localhost:8000", ws: true },
+      "/themes-curate": { target: "ws://localhost:8000", ws: true },
     },
   },
 });
