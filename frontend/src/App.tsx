@@ -444,7 +444,7 @@ export default function App() {
                   onWipe={async () => {
                     if (
                       !window.confirm(
-                        "Wipe this corpus? This deletes all uploaded notes and eras from the host.",
+                        "Delete this corpus? This permanently removes all uploaded notes and eras from the host.",
                       )
                     ) {
                       return;

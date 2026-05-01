@@ -108,7 +108,7 @@ export function HeaderMenu({
               className="block w-full px-3 py-1.5 text-left text-xs text-stone-500 hover:bg-stone-50 hover:text-red-600"
               role="menuitem"
             >
-              Wipe corpus
+              Delete corpus
             </button>
           )}
           {!!userEmail && (
