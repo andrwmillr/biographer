@@ -351,6 +351,11 @@ export function ChatWorkspace({
 
   function startSession(opts: { resumeRunId?: string } = {}) {
     if (wsStatus !== "idle" && wsStatus !== "done" && wsStatus !== "error") return;
+    // Synchronous guard against double-fire in dev (StrictMode runs effects
+    // twice before state updates propagate, so the wsStatus check above
+    // can pass twice for the same intent). wsRef.current is set
+    // synchronously inside this function — checking it catches the dupe.
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) return;
     const resuming = !!opts.resumeRunId;
     if (!resuming) {
       // Fresh session: clear all state. Resume keeps the existing draft

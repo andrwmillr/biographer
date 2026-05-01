@@ -422,9 +422,15 @@ async def session(ws: WebSocket):
                     return
                 run_dir_abs = run_dir.resolve()
                 kickoff = build_era_resume_kickoff(run_dir_abs, corpus_id)
+                # Cold resume doesn't recompute prior/future context (the
+                # original kickoff text already in user.md captures it),
+                # but we still want notes_count for the chat header so
+                # the replayed spawned event doesn't say "reading 0 notes"
+                # forever after.
+                _, by_era, _ = _load_state(corpus_id)
                 inputs = {
                     "run_rel": resume_run_rel,
-                    "notes_count": 0,
+                    "notes_count": len(by_era.get(era, [])),
                     "prior_count": 0,
                     "digest_count": 0,
                     "future_count": 0,
