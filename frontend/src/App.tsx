@@ -606,7 +606,7 @@ export default function App() {
                                 (disabled
                                   ? "text-stone-300 cursor-not-allowed"
                                   : active
-                                    ? "text-stone-900 italic"
+                                    ? "text-stone-900 font-semibold"
                                     : "text-stone-700 hover:bg-stone-50")
                               }
                             >
