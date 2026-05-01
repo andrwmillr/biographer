@@ -9,8 +9,8 @@ Endpoints are split across routers in sibling modules:
   drafts.py   — chapter drafting (/draft, /session WS)
   themes.py   — themes-curate flow (/themes-curate WS, /notes/themes-top-n)
 
-`config.py` (imported first, side effects only) loads `_scripts/.env` and
-inserts `_scripts/` onto sys.path before `import corpus as wb`.
+`config.py` (imported first, side effects only) loads `scripts/.env` and
+inserts `scripts/` onto sys.path before `import corpus as wb`.
 
 Run:
   uv run --with 'fastapi[standard]' --with anthropic --with pyyaml \\

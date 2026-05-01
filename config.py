@@ -7,7 +7,7 @@ constants are immutable and can be imported by name (`from config import
 REPO, MAX_UPLOAD_BYTES, ...`).
 
 Importing this module also has the side effect of (a) loading
-`_scripts/.env` into os.environ and (b) inserting `_scripts/` onto
+`scripts/.env` into os.environ and (b) inserting `scripts/` onto
 sys.path. This must run before `import corpus as wb` from any
 module — keep `import config` (or `from config import ...`) at the top of
 every consumer.
@@ -20,12 +20,13 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "_scripts"))
+SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Load _scripts/.env into the environment, but skip ANTHROPIC_API_KEY so
+# Load scripts/.env into the environment, but skip ANTHROPIC_API_KEY so
 # claude-agent-sdk falls back to the user's Claude Code subscription
 # instead of billing the API account.
-_env_file = REPO / "_scripts" / ".env"
+_env_file = SCRIPTS_DIR / ".env"
 if _env_file.exists():
     for line in _env_file.read_text().splitlines():
         line = line.strip()
@@ -65,7 +66,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024   # 500 MB uncompressed (zip-bomb defense)
 
 # Prompt files used by drafts + themes flows.
-KICKOFF_PATH = REPO / "_scripts" / "KICKOFF.md"
-THEMES_R1_PATH = REPO / "_scripts" / "THEMES_R1.md"
-CURATE_PATH = REPO / "_scripts" / "CURATE.md"
-CURATE_KICKOFF_PATH = REPO / "_scripts" / "CURATE_KICKOFF.md"
+KICKOFF_PATH = SCRIPTS_DIR / "KICKOFF.md"
+THEMES_R1_PATH = SCRIPTS_DIR / "THEMES_R1.md"
+CURATE_PATH = SCRIPTS_DIR / "CURATE.md"
+CURATE_KICKOFF_PATH = SCRIPTS_DIR / "CURATE_KICKOFF.md"

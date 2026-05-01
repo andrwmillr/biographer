@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 # conftest.py sets ADMIN_EMAILS in env before this module imports server.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import auth  # noqa: E402
 import config  # noqa: E402
 import corpora  # noqa: E402
