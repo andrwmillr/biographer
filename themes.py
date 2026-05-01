@@ -235,12 +235,19 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
             await stdin_task
             rc = await proc.wait()
         except Exception as e:
-            if proc and proc.returncode is None:
-                proc.kill()
             if chunks:
                 (run_dir / "output.partial.md").write_text("".join(chunks), encoding="utf-8")
             await send({"type": "error", "message": f"round-1 failed: {type(e).__name__}: {e}"})
             return
+        finally:
+            # Reap on any exit path (success, exception, or task cancellation
+            # from a WS disconnect). Without this, the `claude -p` subprocess
+            # outlives the handler and accumulates as orphans.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
 
         round1_text = "".join(chunks)
         (run_dir / "output.md").write_text(round1_text, encoding="utf-8")

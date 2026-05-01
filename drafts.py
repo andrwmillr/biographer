@@ -286,9 +286,16 @@ async def draft(req: DraftRequest, session: str = Depends(require_writable)):
                 (run_dir / "output.partial.md").write_text(
                     "".join(chunks), encoding="utf-8"
                 )
-            if proc and proc.returncode is None:
-                proc.kill()
             yield sse({"type": "error", "message": str(e), "run_dir": run_rel})
+        finally:
+            # Reap on any exit path (success, exception, or generator close
+            # from a client disconnect). Without this, the `claude -p`
+            # subprocess outlives the handler and accumulates as orphans.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
