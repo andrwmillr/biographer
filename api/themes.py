@@ -55,7 +55,7 @@ def _themes_base(corpus_id: str | None = None) -> Path:
     return wb.corpus_root(corpus_id) / "claude" / "themes"
 
 
-def _prepare_themes_run(top_n: int = 7, corpus_id: str | None = None) -> dict:
+def _prepare_themes_run(top_n: int = 5, corpus_id: str | None = None) -> dict:
     """Build the round-1 corpus-themes input message and create a fresh
     themes run dir on disk. Mirrors spin_themes.py's build_input(top_n)
     and OUT_DIR layout.
@@ -106,7 +106,7 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
 
 
 @router.get("/notes/themes-top-n")
-def list_themes_top_n_notes(n: int = 7, session: str = Depends(require_corpus_access)):
+def list_themes_top_n_notes(n: int = 5, session: str = Depends(require_corpus_access)):
     """Folder-aware top-N sample fed to /themes-curate, flattened across
     eras and sorted chronologically. Same item shape as /notes?era=… so
     the UI can use one renderer. Default n=7 — 10 exceeds context."""
@@ -195,7 +195,7 @@ async def themes_curate(ws: WebSocket):
     corpus_id = _session_corpus_id(session_slug)
 
     try:
-        top_n = int(first.get("top_n") or 7)
+        top_n = int(first.get("top_n") or 5)
         model_key = first.get("model")
         model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 

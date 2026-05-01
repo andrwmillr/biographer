@@ -60,7 +60,7 @@ export function ChatWorkspace({
     scope.kind === "era" ? scope.future : false,
   );
   const [topN, setTopN] = useState<number>(
-    scope.kind === "themes" ? scope.topN : 7,
+    scope.kind === "themes" ? scope.topN : 5,
   );
 
   const [notes, setNotes] = useState<Note[]>([]);
@@ -756,7 +756,7 @@ export function ChatWorkspace({
                 min={3}
                 max={20}
                 value={topN}
-                onChange={(e) => setTopN(parseInt(e.target.value) || 7)}
+                onChange={(e) => setTopN(parseInt(e.target.value) || 5)}
                 disabled={phase !== "pre-gen"}
                 className="w-12 rounded border border-stone-300 bg-white px-1 py-1 text-sm tabular-nums disabled:text-stone-400"
               />
