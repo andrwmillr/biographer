@@ -29,11 +29,12 @@ export type LogItem =
     }
   | { kind: "status"; text: string };
 
-// Phase progression of the workspace UI:
-//   pre-gen   → top prompter + notes grid below
-//   generating → same layout, prompter shows "thinking…"
-//   iterating → three-pane: chat | draft | notes
-//   finalized → same three-pane, draft locked + prompter disabled
+// Phase progression of the workspace UI. The 3-pane layout (chat | draft |
+// notes) is always rendered; phase only governs prompter/draft state.
+//   pre-gen    → prompter accepts a kickoff, draft pane empty
+//   generating → prompter shows "thinking…", chat streams
+//   iterating  → prompter accepts revisions, draft updating
+//   finalized  → draft locked + prompter disabled
 export type Phase = "pre-gen" | "generating" | "iterating" | "finalized";
 
 // Determines WS path + start payload + notes endpoint.

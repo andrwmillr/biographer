@@ -432,7 +432,9 @@ export default function App() {
               apiBase={API_BASE}
               wsBase={WS_BASE}
               scope={{ kind: "themes", topN: 7 }}
-              title="Themes"
+              titleNode={
+                <h2 className="font-serif text-lg text-stone-900">Themes</h2>
+              }
             />
           )}
         </div>

@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  ImperativePanelGroupHandle,
+  ImperativePanelHandle,
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from "react-resizable-panels";
 import { Markdown, formatTool } from "./markdown";
-import { NotesPane } from "./NotesPane";
+import { NotesTimeline } from "./NotesTimeline";
 import { authHeaders, getAuthToken, getSession } from "./auth";
 import type {
   FinalizedInfo,
@@ -15,14 +22,11 @@ type ChatWorkspaceProps = {
   apiBase: string;
   wsBase: string;
   scope: WorkspaceScope;
-  // Optional control: shown above the workspace as a back link. Used by the
-  // eras tab to return to the era list. Themes scope omits this.
-  onBack?: () => void;
   // Called when the server emits `finalized` — used by the eras tab to
   // refetch the era list so the chapter checkmark updates.
   onFinalized?: (info: FinalizedInfo) => void;
-  // Optional title for the workspace (e.g. era name, "Themes").
-  title?: string;
+  // Title slot for the control bar — string or JSX (e.g. era selector).
+  titleNode?: ReactNode;
 };
 
 type WSStatus =
@@ -33,15 +37,22 @@ type WSStatus =
   | "done"
   | "error";
 
+type PaneId = "chat" | "draft" | "notes";
+const PANE_ORDER: PaneId[] = ["chat", "draft", "notes"];
+const PANE_TITLES: Record<PaneId, string> = {
+  chat: "Chat",
+  draft: "Draft",
+  notes: "Notes",
+};
+
 const MODELS = ["opus-4.7", "opus-4.6", "sonnet-4.6"] as const;
 
 export function ChatWorkspace({
   apiBase,
   wsBase,
   scope,
-  onBack,
   onFinalized,
-  title,
+  titleNode,
 }: ChatWorkspaceProps) {
   const [phase, setPhase] = useState<Phase>("pre-gen");
   const [model, setModel] = useState<string>("opus-4.7");
@@ -66,6 +77,24 @@ export function ChatWorkspace({
   const [finalized, setFinalized] = useState<FinalizedInfo | null>(null);
   const [highlightDate, setHighlightDate] = useState<string>("");
 
+  // Pane collapse state is in-memory (resets on remount). Draft starts
+  // collapsed — it's empty until the agent produces output. Auto-expands on
+  // first draft content (see effect below).
+  const [collapsed, setCollapsed] = useState<Record<PaneId, boolean>>({
+    chat: false,
+    draft: true,
+    notes: false,
+  });
+  const panelRefs = useRef<Record<PaneId, ImperativePanelHandle | null>>({
+    chat: null,
+    draft: null,
+    notes: null,
+  });
+  const panelGroupRef = useRef<ImperativePanelGroupHandle | null>(null);
+  // Latches once we've auto-expanded draft on first content. Prevents
+  // re-expanding if the user manually collapses it later in the session.
+  const draftAutoExpandedRef = useRef<boolean>(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const narrationBufRef = useRef<string>("");
   const chatLogRef = useRef<HTMLDivElement | null>(null);
@@ -73,6 +102,36 @@ export function ChatWorkspace({
   // generating→iterating transition. Used to ignore later awaiting_reply
   // events for phase decisions (we only need the first one to flip layout).
   const sawFirstAwaitingRef = useRef<boolean>(false);
+  // Drives the first-turn token-progress estimate (no real progress event
+  // from the model during prompt processing).
+  const [wsElapsed, setWsElapsed] = useState<number>(0);
+  const wsTurnStartRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (wsStatus !== "generating") return;
+    const id = setInterval(() => {
+      setWsElapsed(Math.floor((Date.now() - wsTurnStartRef.current) / 1000));
+    }, 250);
+    return () => clearInterval(id);
+  }, [wsStatus]);
+
+  // Apply the initial collapsed-draft layout on mount. autoSaveId would
+  // otherwise restore a previous 33/33/33 layout, leaving the rail rendered
+  // inside a 33%-wide slot.
+  useEffect(() => {
+    panelGroupRef.current?.setLayout([48.5, 3, 48.5]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-expand draft on first content arrival. Latches via ref so a manual
+  // collapse later doesn't get fought by re-expansion.
+  useEffect(() => {
+    if (!draft) return;
+    if (draftAutoExpandedRef.current) return;
+    draftAutoExpandedRef.current = true;
+    togglePaneCollapse("draft");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
 
   // ---- Notes fetch ----
   // Re-runs when scope changes (which only happens via remount via key)
@@ -152,6 +211,7 @@ export function ChatWorkspace({
     setLog([]);
     setDraft("");
     setReplyText("");
+    draftAutoExpandedRef.current = false;
     setSpawned(null);
     setCost(0);
     setError("");
@@ -159,6 +219,8 @@ export function ChatWorkspace({
     setHighlightDate("");
     narrationBufRef.current = "";
     sawFirstAwaitingRef.current = false;
+    wsTurnStartRef.current = Date.now();
+    setWsElapsed(0);
     setPhase("generating");
     setWsStatus("connecting");
 
@@ -199,7 +261,6 @@ export function ChatWorkspace({
           setWsStatus("awaiting_reply");
           if (!sawFirstAwaitingRef.current) {
             sawFirstAwaitingRef.current = true;
-            // First awaiting_reply unlocks the iterating layout.
             setPhase((p) => (p === "finalized" ? p : "iterating"));
           }
         }
@@ -222,8 +283,6 @@ export function ChatWorkspace({
           ),
         );
       } else if (t === "draft_update") {
-        // Eras: only "output" is the chapter. Themes: both "output" (round-1
-        // candidates) and "themes" (curated) update the same draft pane.
         const interesting =
           (scope.kind === "era" && payload.kind === "output") ||
           (scope.kind === "themes" &&
@@ -264,7 +323,6 @@ export function ChatWorkspace({
 
     ws.onclose = () => {
       flushNarration();
-      // If we never reached done/error, treat as done.
       setWsStatus((s) => (s === "done" || s === "error" ? s : "done"));
     };
   }
@@ -283,8 +341,6 @@ export function ChatWorkspace({
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "finalize" }));
-    // For themes the server runs an agent turn before emitting `finalized`,
-    // so flip wsStatus back to generating to disable the prompter meanwhile.
     if (scope.kind === "themes") setWsStatus("generating");
   }
 
@@ -299,6 +355,25 @@ export function ChatWorkspace({
 
   function handleCiteClick(dateKey: string) {
     setHighlightDate(dateKey);
+    if (collapsed.notes) {
+      panelRefs.current.notes?.expand();
+    }
+  }
+
+  function togglePaneCollapse(id: PaneId) {
+    // Compute target collapsed state synchronously, then build a layout
+    // that splits 100% across all panes ourselves. Library defaults can
+    // squeeze a non-toggled pane down to collapsedSize without firing
+    // onCollapse, leaving the UI showing expanded content in a 3% sliver.
+    const COLLAPSED = 3;
+    const next: Record<PaneId, boolean> = { ...collapsed, [id]: !collapsed[id] };
+    const expanded = PANE_ORDER.filter((p) => !next[p]);
+    const share = expanded.length
+      ? (100 - COLLAPSED * (PANE_ORDER.length - expanded.length)) /
+        expanded.length
+      : 0;
+    const sizes = PANE_ORDER.map((p) => (next[p] ? COLLAPSED : share));
+    panelGroupRef.current?.setLayout(sizes);
   }
 
   // ---- Render helpers ----
@@ -397,23 +472,237 @@ export function ChatWorkspace({
     );
   }
 
-  const isPreOrGen = phase === "pre-gen" || phase === "generating";
+  function renderChatBody() {
+    return (
+      <div className="flex h-full flex-col min-h-0">
+        <div
+          ref={chatLogRef}
+          className="flex-1 bg-white p-4 font-sans text-sm text-stone-800 overflow-auto min-h-0"
+        >
+          {log.length === 0 && phase === "pre-gen" && (
+            <span className="text-stone-400 text-xs">
+              Press ▶ below to start the session.
+            </span>
+          )}
+          {log.length === 0 && wsStatus === "generating" && (() => {
+            const inputChars = spawned?.input_chars ?? 0;
+            const totalTok = Math.round(inputChars / 4);
+            // Conservative prompt-processing rate (~1.5K tok/s) capped
+            // at 90% so we never claim "almost done" before the model
+            // actually emits.
+            const progressTok = Math.min(
+              Math.round(wsElapsed * 1500),
+              Math.round(totalTok * 0.9),
+            );
+            const fmt = (n: number) =>
+              n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+            const inputSummary =
+              scope.kind === "era" && spawned
+                ? `reading ${spawned.notes ?? 0} notes` +
+                  ((spawned.prior_chapters ?? 0) > 0
+                    ? ` + ${spawned.prior_chapters} prior chapter${spawned.prior_chapters === 1 ? "" : "s"}`
+                    : "") +
+                  ((spawned.future_chapters ?? 0) > 0
+                    ? ` + ${spawned.future_chapters} future chapter${spawned.future_chapters === 1 ? "" : "s"}`
+                    : "")
+                : scope.kind === "themes" && spawned
+                  ? `reading top-${spawned.top_n ?? topN} per era`
+                  : "starting…";
+            return (
+              <div className="my-2 flex items-center gap-2 text-stone-500">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
+                <span>
+                  {inputSummary}
+                  {totalTok > 0 && (
+                    <span className="text-stone-400">
+                      {" "}
+                      · <span className="tabular-nums">{fmt(progressTok)}</span>
+                      {" / "}
+                      <span className="tabular-nums">{fmt(totalTok)}</span> tokens
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })()}
+          {log.map((it, i) => {
+            if (it.kind === "narration") {
+              return (
+                <div key={i}>
+                  <Markdown
+                    content={it.text}
+                    variant="narration"
+                    onCiteClick={handleCiteClick}
+                  />
+                </div>
+              );
+            }
+            if (it.kind === "user") {
+              return (
+                <div key={i} className="my-3 flex justify-end">
+                  <div className="max-w-[85%] rounded-lg bg-stone-100 border border-stone-200 px-3 py-2 text-stone-800 whitespace-pre-wrap">
+                    {it.text}
+                  </div>
+                </div>
+              );
+            }
+            if (it.kind === "tool") {
+              return (
+                <div key={i} className="my-1 text-xs font-mono">
+                  <div className="text-stone-500">
+                    {formatTool(it.name, it.input, spawned?.run_dir ?? "")}
+                    {it.result === "ok" && " ✓"}
+                    {it.result === "err" && " ✗"}
+                  </div>
+                  {it.error_text && (
+                    <div className="ml-4 mt-0.5 whitespace-pre-wrap text-red-700">
+                      {it.error_text}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (it.kind === "status") {
+              return (
+                <div
+                  key={i}
+                  className="my-1 text-xs font-mono text-stone-400"
+                >
+                  {it.text}
+                </div>
+              );
+            }
+            return null;
+          })}
+          {wsStatus === "generating" && log.length > 0 && (
+            <span className="inline-block w-2 h-4 ml-0.5 align-text-bottom bg-stone-400 animate-pulse" />
+          )}
+        </div>
+        <div className="border-t border-stone-200 bg-white p-3">
+          <div className="mb-1 flex items-center gap-2 text-xs font-sans">
+            {wsStatus === "generating" && (
+              <>
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-amber-700">working…</span>
+              </>
+            )}
+            {wsStatus === "awaiting_reply" && phase !== "finalized" && (
+              <>
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span className="text-emerald-700">ready for your reply</span>
+              </>
+            )}
+            {phase === "finalized" && (
+              <span className="text-stone-500">draft locked</span>
+            )}
+            {wsStatus === "done" && phase !== "finalized" && (
+              <span className="text-stone-500">session ended</span>
+            )}
+            {phase === "pre-gen" && (
+              <span className="text-stone-400">not started</span>
+            )}
+          </div>
+          <Prompter />
+        </div>
+      </div>
+    );
+  }
+
+  function renderDraftBody() {
+    return (
+      <article
+        className={
+          "h-full overflow-auto bg-white p-6 font-serif text-[16px] leading-[1.7] text-stone-900 " +
+          (phase === "finalized" ? "ring-1 ring-inset ring-emerald-200" : "")
+        }
+      >
+        {draft ? (
+          <Markdown
+            content={draft}
+            variant="chapter"
+            onCiteClick={handleCiteClick}
+          />
+        ) : (
+          <span className="font-sans text-sm text-stone-400">
+            (no draft content yet)
+          </span>
+        )}
+      </article>
+    );
+  }
+
+  function renderNotesBody() {
+    return (
+      <NotesTimeline
+        notes={notes}
+        loading={notesLoading}
+        highlightDate={highlightDate}
+        emptyHint={
+          scope.kind === "era" ? "no notes in this era" : "no notes available"
+        }
+      />
+    );
+  }
+
+  function renderPaneContent(id: PaneId) {
+    if (id === "chat") return renderChatBody();
+    if (id === "draft") return renderDraftBody();
+    return renderNotesBody();
+  }
+
+  function PaneHeader({ id }: { id: PaneId }) {
+    const isCollapsed = collapsed[id];
+    return (
+      <div className="flex items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
+        <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500">
+          {PANE_TITLES[id]}
+          {id === "draft" && draft && (
+            <span className="ml-1 normal-case tracking-normal text-stone-400">
+              ({draft.length.toLocaleString()} ch)
+            </span>
+          )}
+          {id === "notes" && notes.length > 0 && (
+            <span className="ml-1 normal-case tracking-normal text-stone-400">
+              ({notes.length})
+            </span>
+          )}
+        </span>
+        <button
+          onClick={() => togglePaneCollapse(id)}
+          className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-200 hover:text-stone-700"
+          title={isCollapsed ? "expand pane" : "collapse pane"}
+          aria-label={isCollapsed ? "expand pane" : "collapse pane"}
+        >
+          {isCollapsed ? "+" : "−"}
+        </button>
+      </div>
+    );
+  }
+
+  function CollapsedRail({ id }: { id: PaneId }) {
+    return (
+      <button
+        onClick={() => togglePaneCollapse(id)}
+        className="flex h-full w-full flex-col items-center justify-start gap-2 bg-stone-50 py-3 text-stone-500 hover:bg-stone-100 hover:text-stone-700"
+        title="expand pane"
+        aria-label={`expand ${PANE_TITLES[id]} pane`}
+      >
+        <span className="text-stone-400 text-xs">+</span>
+        <span
+          className="font-sans text-[10px] uppercase tracking-wider"
+          style={{ writingMode: "vertical-rl" }}
+        >
+          {PANE_TITLES[id]}
+        </span>
+      </button>
+    );
+  }
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-4">
+    <div className="mx-auto max-w-[120rem] px-6 py-4">
       {/* ---- Title / control bar ---- */}
       <div className="mb-4 flex items-center gap-3 flex-wrap">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="font-sans text-xs text-stone-500 hover:text-stone-800 underline-offset-2 hover:underline"
-          >
-            ← back
-          </button>
-        )}
-        {title && (
-          <h2 className="font-serif text-lg text-stone-900">{title}</h2>
-        )}
+        {titleNode}
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           <select
             className="rounded border border-stone-300 bg-white px-2 py-1 text-sm disabled:text-stone-400"
@@ -538,168 +827,50 @@ export function ChatWorkspace({
         </div>
       )}
 
-      {/* ---- Phase-dependent body ---- */}
-      {isPreOrGen ? (
-        <div className="space-y-6">
-          <Prompter />
-          <NotesPane
-            notes={notes}
-            loading={notesLoading}
-            layout="grid"
-            emptyHint={
-              scope.kind === "era"
-                ? "no notes in this era"
-                : "no notes available"
-            }
-          />
-        </div>
-      ) : (
-        <div className="grid gap-4 grid-cols-1 lg:grid-cols-12 h-[80vh]">
-          {/* ---- Chat pane ---- */}
-          <section className="lg:col-span-4 flex flex-col min-h-0">
-            <div
-              ref={chatLogRef}
-              className="flex-1 rounded border border-stone-200 bg-white p-4 font-sans text-sm text-stone-800 overflow-auto min-h-0"
-            >
-              {log.length === 0 && wsStatus === "generating" && (
-                <span className="text-stone-400">starting…</span>
-              )}
-              {log.map((it, i) => {
-                if (it.kind === "narration") {
-                  return (
-                    <div key={i}>
-                      <Markdown
-                        content={it.text}
-                        variant="narration"
-                        onCiteClick={handleCiteClick}
-                      />
-                    </div>
-                  );
+      {/* ---- 3-pane workspace ---- */}
+      <div className="h-[80vh] rounded border border-stone-200 overflow-hidden bg-white">
+        <PanelGroup
+          direction="horizontal"
+          autoSaveId="workspace_panels_v1"
+          ref={panelGroupRef}
+        >
+          {PANE_ORDER.map((id, idx) => (
+            <Fragment key={id}>
+              <Panel
+                id={id}
+                defaultSize={100 / PANE_ORDER.length}
+                minSize={12}
+                collapsible
+                collapsedSize={3}
+                onCollapse={() =>
+                  setCollapsed((c) => ({ ...c, [id]: true }))
                 }
-                if (it.kind === "user") {
-                  return (
-                    <div key={i} className="my-3 flex justify-end">
-                      <div className="max-w-[85%] rounded-lg bg-stone-100 border border-stone-200 px-3 py-2 text-stone-800 whitespace-pre-wrap">
-                        {it.text}
-                      </div>
-                    </div>
-                  );
+                onExpand={() =>
+                  setCollapsed((c) => ({ ...c, [id]: false }))
                 }
-                if (it.kind === "tool") {
-                  return (
-                    <div key={i} className="my-1 text-xs font-mono">
-                      <div className="text-stone-500">
-                        {formatTool(it.name, it.input, spawned?.run_dir ?? "")}
-                        {it.result === "ok" && " ✓"}
-                        {it.result === "err" && " ✗"}
-                      </div>
-                      {it.error_text && (
-                        <div className="ml-4 mt-0.5 whitespace-pre-wrap text-red-700">
-                          {it.error_text}
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-                if (it.kind === "status") {
-                  return (
-                    <div
-                      key={i}
-                      className="my-1 text-xs font-mono text-stone-400"
-                    >
-                      {it.text}
-                    </div>
-                  );
-                }
-                return null;
-              })}
-              {wsStatus === "generating" && log.length > 0 && (
-                <span className="inline-block w-2 h-4 ml-0.5 align-text-bottom bg-stone-400 animate-pulse" />
-              )}
-            </div>
-            <div className="mt-3">
-              <div className="mb-1 flex items-center gap-2 text-xs font-sans">
-                {wsStatus === "generating" && (
+                ref={(el) => {
+                  panelRefs.current[id] = el;
+                }}
+                className="flex flex-col"
+              >
+                {collapsed[id] ? (
+                  <CollapsedRail id={id} />
+                ) : (
                   <>
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                    <span className="text-amber-700">working…</span>
+                    <PaneHeader id={id} />
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                      {renderPaneContent(id)}
+                    </div>
                   </>
                 )}
-                {wsStatus === "awaiting_reply" && phase !== "finalized" && (
-                  <>
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    <span className="text-emerald-700">ready for your reply</span>
-                  </>
-                )}
-                {phase === "finalized" && (
-                  <span className="text-stone-500">draft locked</span>
-                )}
-                {wsStatus === "done" && phase !== "finalized" && (
-                  <span className="text-stone-500">session ended</span>
-                )}
-              </div>
-              <Prompter />
-            </div>
-          </section>
-
-          {/* ---- Draft pane ---- */}
-          <section className="lg:col-span-5 flex flex-col min-h-0">
-            <div className="mb-1 flex items-center gap-2 text-xs font-sans uppercase tracking-wider text-stone-500">
-              <span>{phase === "finalized" ? "locked draft" : "draft"}</span>
-              {draft && (
-                <span className="normal-case tracking-normal text-stone-400">
-                  ({draft.length.toLocaleString()} ch)
-                </span>
+              </Panel>
+              {idx < PANE_ORDER.length - 1 && (
+                <PanelResizeHandle className="w-1 bg-stone-100 hover:bg-stone-300 transition-colors" />
               )}
-            </div>
-            <article
-              className={
-                "flex-1 rounded border bg-white p-6 font-serif text-[16px] leading-[1.7] text-stone-900 overflow-auto min-h-0 " +
-                (phase === "finalized"
-                  ? "border-emerald-200"
-                  : "border-stone-200")
-              }
-            >
-              {draft ? (
-                <Markdown
-                  content={draft}
-                  variant="chapter"
-                  onCiteClick={handleCiteClick}
-                />
-              ) : (
-                <span className="font-sans text-sm text-stone-400">
-                  (no draft content yet)
-                </span>
-              )}
-            </article>
-          </section>
-
-          {/* ---- Notes pane ---- */}
-          <aside className="lg:col-span-3 flex flex-col min-h-0">
-            <div className="mb-1 flex items-center gap-2 text-xs font-sans uppercase tracking-wider text-stone-500">
-              <span>notes</span>
-              {notes.length > 0 && (
-                <span className="normal-case tracking-normal text-stone-400">
-                  ({notes.length})
-                </span>
-              )}
-            </div>
-            <div className="flex-1 overflow-auto rounded border border-stone-200 bg-stone-50 p-3 min-h-0">
-              <NotesPane
-                notes={notes}
-                loading={notesLoading}
-                layout="column"
-                highlightDate={highlightDate}
-                emptyHint={
-                  scope.kind === "era"
-                    ? "no notes in this era"
-                    : "no notes available"
-                }
-              />
-            </div>
-          </aside>
-        </div>
-      )}
+            </Fragment>
+          ))}
+        </PanelGroup>
+      </div>
     </div>
   );
 }
