@@ -18,7 +18,7 @@ from pathlib import Path
 
 from anthropic import AsyncAnthropic
 
-CORPUS = Path(__file__).resolve().parent.parent / "_corpus"
+CORPUS = Path(__file__).resolve().parent.parent / "_corpora" / "andrew"
 BIOGRAPHIES_DIR = CORPUS / "claude" / "biographies"
 SUMMARIES_DIR = CORPUS / "claude" / "summaries"
 MODEL = "claude-opus-4-7"

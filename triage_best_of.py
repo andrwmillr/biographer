@@ -28,7 +28,7 @@ from urllib.parse import urlparse, parse_qs
 sys.path.insert(0, str(Path(__file__).parent))
 from write_biography import ERAS, era_of  # type: ignore
 
-CORPUS = Path.home() / "notes-archive" / "_corpus"
+CORPUS = Path.home() / "notes-archive" / "_corpora" / "andrew"
 NOTES_DIR = CORPUS / "notes"
 PHASE_A = CORPUS / "_derived" / "_phase_a.jsonl"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]

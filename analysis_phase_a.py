@@ -22,7 +22,7 @@ from pathlib import Path
 
 from anthropic import AsyncAnthropic
 
-CORPUS = Path.home() / "notes-archive" / "_corpus"
+CORPUS = Path.home() / "notes-archive" / "_corpora" / "andrew"
 NOTES_DIR = CORPUS / "notes"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
 MODEL = "claude-sonnet-4-6"

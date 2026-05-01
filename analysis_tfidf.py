@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-CORPUS = Path.home() / "notes-archive" / "_corpus"
+CORPUS = Path.home() / "notes-archive" / "_corpora" / "andrew"
 NOTES_DIR = CORPUS / "notes"
 WRITING_LABELS = ["journal", "creative", "poetry", "letter"]
 OUT_TSV = CORPUS / "_derived" / "_tfidf_quarterly.tsv"
