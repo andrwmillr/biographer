@@ -70,6 +70,7 @@ export function EraTab({ apiBase, wsBase }: EraTabProps) {
   const titleNode = (
     <div className="flex items-baseline gap-2">
       <select
+        name="era"
         className="font-serif text-lg text-stone-900 bg-transparent border-0 border-b border-stone-200 hover:border-stone-400 focus:border-stone-600 focus:outline-none px-1 py-0.5"
         value={era.name}
         onChange={(e) => setSelectedEra(e.target.value)}

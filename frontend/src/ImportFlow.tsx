@@ -116,6 +116,7 @@ export function ImportFlow({
             </span>
             <input
               type="file"
+              name="notes-zip"
               accept=".zip,application/zip"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -144,6 +145,7 @@ export function ImportFlow({
           <span className="text-sm font-medium text-stone-700">eras.yaml</span>
           <input
             type="file"
+            name="eras-yaml"
             accept=".yaml,.yml,application/x-yaml,text/yaml,text/plain"
             onChange={(e) => {
               const file = e.target.files?.[0];

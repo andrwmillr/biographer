@@ -296,6 +296,8 @@ export default function App() {
                     </span>
                     <input
                       type="email"
+                      name="email"
+                      autoComplete="email"
                       required
                       autoFocus
                       value={loginEmail}

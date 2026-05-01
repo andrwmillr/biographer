@@ -249,7 +249,19 @@ export function ChatWorkspace({
       }
       const t = payload.type;
       if (t === "spawned") {
-        setSpawned(payload as SpawnedInfo);
+        const info = payload as SpawnedInfo;
+        setSpawned(info);
+        const summary =
+          scope.kind === "era"
+            ? `reading ${info.notes ?? 0} notes` +
+              ((info.prior_chapters ?? 0) > 0
+                ? ` + ${info.prior_chapters} prior chapter${info.prior_chapters === 1 ? "" : "s"}`
+                : "") +
+              ((info.future_chapters ?? 0) > 0
+                ? ` + ${info.future_chapters} future chapter${info.future_chapters === 1 ? "" : "s"}`
+                : "")
+            : `reading top-${info.top_n ?? topN} per era`;
+        setLog((l) => [...l, { kind: "status", text: summary }]);
       } else if (t === "narration") {
         narrationBufRef.current += payload.text;
         flushNarration();
@@ -419,6 +431,7 @@ export function ChatWorkspace({
     return (
       <div className="relative">
         <textarea
+          name="reply"
           className={
             "block w-full resize-none rounded border px-3 pt-2 pb-11 text-sm font-sans transition-colors disabled:text-stone-400 " +
             borderClass
@@ -484,47 +497,32 @@ export function ChatWorkspace({
               Press ▶ below to start the session.
             </span>
           )}
-          {log.length === 0 && wsStatus === "generating" && (() => {
-            const inputChars = spawned?.input_chars ?? 0;
-            const totalTok = Math.round(inputChars / 4);
-            // Conservative prompt-processing rate (~1.5K tok/s) capped
-            // at 90% so we never claim "almost done" before the model
-            // actually emits.
-            const progressTok = Math.min(
-              Math.round(wsElapsed * 1500),
-              Math.round(totalTok * 0.9),
-            );
-            const fmt = (n: number) =>
-              n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-            const inputSummary =
-              scope.kind === "era" && spawned
-                ? `reading ${spawned.notes ?? 0} notes` +
-                  ((spawned.prior_chapters ?? 0) > 0
-                    ? ` + ${spawned.prior_chapters} prior chapter${spawned.prior_chapters === 1 ? "" : "s"}`
-                    : "") +
-                  ((spawned.future_chapters ?? 0) > 0
-                    ? ` + ${spawned.future_chapters} future chapter${spawned.future_chapters === 1 ? "" : "s"}`
-                    : "")
-                : scope.kind === "themes" && spawned
-                  ? `reading top-${spawned.top_n ?? topN} per era`
-                  : "starting…";
-            return (
-              <div className="my-2 flex items-center gap-2 text-stone-500">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
-                <span>
-                  {inputSummary}
-                  {totalTok > 0 && (
-                    <span className="text-stone-400">
-                      {" "}
-                      · <span className="tabular-nums">{fmt(progressTok)}</span>
-                      {" / "}
-                      <span className="tabular-nums">{fmt(totalTok)}</span> tokens
-                    </span>
-                  )}
-                </span>
-              </div>
-            );
-          })()}
+          {wsStatus === "generating" &&
+            !log.some((it) => it.kind === "narration") &&
+            (() => {
+              const inputChars = spawned?.input_chars ?? 0;
+              const totalTok = Math.round(inputChars / 4);
+              if (totalTok <= 0) return null;
+              // Conservative prompt-processing rate (~1.5K tok/s) capped
+              // at 90% so we never claim "almost done" before the model
+              // actually emits.
+              const progressTok = Math.min(
+                Math.round(wsElapsed * 1500),
+                Math.round(totalTok * 0.9),
+              );
+              const fmt = (n: number) =>
+                n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+              return (
+                <div className="my-2 flex items-center gap-2 text-stone-500">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
+                  <span className="text-stone-400">
+                    <span className="tabular-nums">{fmt(progressTok)}</span>
+                    {" / "}
+                    <span className="tabular-nums">{fmt(totalTok)}</span> tokens
+                  </span>
+                </div>
+              );
+            })()}
           {log.map((it, i) => {
             if (it.kind === "narration") {
               return (
@@ -705,6 +703,7 @@ export function ChatWorkspace({
         {titleNode}
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           <select
+            name="model"
             className="rounded border border-stone-300 bg-white px-2 py-1 text-sm disabled:text-stone-400"
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -729,6 +728,7 @@ export function ChatWorkspace({
             >
               <input
                 type="checkbox"
+                name="future"
                 checked={future}
                 onChange={(e) => setFuture(e.target.checked)}
                 disabled={phase !== "pre-gen"}
@@ -747,6 +747,7 @@ export function ChatWorkspace({
               top-n
               <input
                 type="number"
+                name="top-n"
                 min={3}
                 max={20}
                 value={topN}

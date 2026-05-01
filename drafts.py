@@ -454,51 +454,71 @@ async def session(
             async def drain_turn():
                 nonlocal cumulative_cost
                 await send({"type": "status", "status": "generating"})
-                async for msg in client.receive_response():
-                    if isinstance(msg, StreamEvent):
-                        event = msg.event if hasattr(msg, "event") else {}
-                        etype = event.get("type")
-                        if etype == "content_block_delta":
-                            delta = event.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text", "")
-                                if text:
-                                    await send({"type": "narration", "text": text})
-                    elif isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, ToolUseBlock):
-                                await send({
-                                    "type": "tool_use",
-                                    "id": block.id,
-                                    "name": block.name,
-                                    "input": block.input or {},
-                                })
-                    elif isinstance(msg, UserMessage):
-                        for block in msg.content if isinstance(msg.content, list) else []:
-                            if isinstance(block, ToolResultBlock):
-                                tr = block.content
-                                if isinstance(tr, list):
-                                    tr = "".join(
-                                        getattr(x, "text", "") or str(x) for x in tr
-                                    )
-                                tr = str(tr or "")
-                                if len(tr) > 600:
-                                    tr = tr[:600] + "…"
-                                await send({
-                                    "type": "tool_result",
-                                    "id": block.tool_use_id,
-                                    "is_error": bool(block.is_error),
-                                    "text": tr,
-                                })
-                    elif isinstance(msg, ResultMessage):
-                        cumulative_cost = msg.total_cost_usd or cumulative_cost
-                        usage = getattr(msg, "usage", None) or {}
+                narration_chars = 0
+
+                async def heartbeat():
+                    start = asyncio.get_running_loop().time()
+                    while True:
+                        await asyncio.sleep(30)
+                        elapsed = int(asyncio.get_running_loop().time() - start)
                         await send({
-                            "type": "turn_end",
-                            "cost_usd": cumulative_cost,
-                            "stop_reason": getattr(msg, "stop_reason", "") or "",
-                            "usage": usage,
+                            "type": "log",
+                            "text": (
+                                f"… still working ({elapsed}s elapsed, "
+                                f"{narration_chars} chars streamed)"
+                            ),
                         })
+
+                hb_task = asyncio.create_task(heartbeat())
+                try:
+                    async for msg in client.receive_response():
+                        if isinstance(msg, StreamEvent):
+                            event = msg.event if hasattr(msg, "event") else {}
+                            etype = event.get("type")
+                            if etype == "content_block_delta":
+                                delta = event.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        narration_chars += len(text)
+                                        await send({"type": "narration", "text": text})
+                        elif isinstance(msg, AssistantMessage):
+                            for block in msg.content:
+                                if isinstance(block, ToolUseBlock):
+                                    await send({
+                                        "type": "tool_use",
+                                        "id": block.id,
+                                        "name": block.name,
+                                        "input": block.input or {},
+                                    })
+                        elif isinstance(msg, UserMessage):
+                            for block in msg.content if isinstance(msg.content, list) else []:
+                                if isinstance(block, ToolResultBlock):
+                                    tr = block.content
+                                    if isinstance(tr, list):
+                                        tr = "".join(
+                                            getattr(x, "text", "") or str(x) for x in tr
+                                        )
+                                    tr = str(tr or "")
+                                    if len(tr) > 600:
+                                        tr = tr[:600] + "…"
+                                    await send({
+                                        "type": "tool_result",
+                                        "id": block.tool_use_id,
+                                        "is_error": bool(block.is_error),
+                                        "text": tr,
+                                    })
+                        elif isinstance(msg, ResultMessage):
+                            cumulative_cost = msg.total_cost_usd or cumulative_cost
+                            usage = getattr(msg, "usage", None) or {}
+                            await send({
+                                "type": "turn_end",
+                                "cost_usd": cumulative_cost,
+                                "stop_reason": getattr(msg, "stop_reason", "") or "",
+                                "usage": usage,
+                            })
+                finally:
+                    hb_task.cancel()
                 await send({"type": "status", "status": "awaiting_reply"})
 
             await client.query(kickoff)

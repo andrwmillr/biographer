@@ -3,12 +3,13 @@
 `GET /notes/themes-top-n` is an admin-gated read returning the
 folder-aware top-N corpus sample (input to the themes flow).
 
-`WS /themes-curate` is two-phase: first a `claude -p` round that produces
-the round-1 themes list (streamed as `narration`, persisted to
-output.md), then a ClaudeSDKClient curate chat that lets the agent edit
-themes within the run dir. On `finalize`, the server sends `/lock` to
-the agent, which writes themes.md; the file watcher emits `finalized`
-when that write lands.
+`WS /themes-curate` is single-phase: a ClaudeSDKClient session whose
+system prompt combines THEMES_R1.md + CURATE.md and whose kickoff
+inlines the corpus sample with instructions to generate round-1 themes
+inline, then transition to curate mode. Streaming is visible from the
+first token. On `finalize`, the server sends `/lock` to the agent,
+which writes themes.md; the file watcher emits `finalized` when that
+write lands.
 """
 from __future__ import annotations
 
@@ -31,7 +32,6 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import StreamEvent
 from config import (
     ADMIN_EMAILS,
-    CURATE_KICKOFF_PATH,
     CURATE_PATH,
     REPO,
     THEMES_R1_PATH,
@@ -75,23 +75,28 @@ def _prepare_themes_run(top_n: int = 7) -> dict:
     }
 
 
-def _build_curate_kickoff(run_dir_abs: Path) -> str:
-    """Read CURATE_KICKOFF.md, substitute placeholders, append the INPUT
-    block of round-1 themes + corpus sample inlined from the run dir.
-    Mirrors _build_kickoff for the chapter flow."""
-    kickoff = CURATE_KICKOFF_PATH.read_text(encoding="utf-8")
-    kickoff = kickoff.replace("__RUN_DIR__", str(run_dir_abs))
-    kickoff = kickoff.replace("__SUBJECT__", wb.SUBJECT_NAME)
-
-    round1_themes = (run_dir_abs / "output.md").read_text(encoding="utf-8")
-    corpus_sample = (run_dir_abs / "input.md").read_text(encoding="utf-8")
-
+def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str) -> str:
+    """Build a single-phase themes kickoff: generate round-1 themes
+    inline in chat, then transition to curate orientation. Replaces the
+    old two-phase flow (`claude -p` round-1 then curate)."""
     return (
-        kickoff.rstrip("\n")
-        + "\n\n--- INPUT-START ---\n\n"
-        + "# Round-1 themes (the starting list)\n\n"
-        + round1_themes
-        + "\n\n# Corpus sample (your full context)\n\n"
+        f"You're starting a fresh themes session for {wb.SUBJECT_NAME}'s corpus. "
+        "The corpus sample is inlined between INPUT-START / INPUT-END below — "
+        "treat it as the entirety of your authorized source material.\n\n"
+        "**First, generate round-1 themes** following the rules in your system "
+        "prompt's round-1 section: 8-12 candidate themes, each with a short "
+        "name, one-line gloss, era list, and 8-10 candidate notes. Use the "
+        "OUTPUT FORMAT from the round-1 section. Stream as you go — don't "
+        "summarize, don't wait.\n\n"
+        "**Then transition to curate mode:** emit a `## Current state` block "
+        'listing every theme you just proposed with status `[kept]`, then end '
+        'with the single line "Ready for your moves." Wait for the user.\n\n'
+        f"When the user signals lock, write themes to {run_dir_abs}/themes.md "
+        "using the Write tool, in the LOCKING format from your system prompt. "
+        "Don't list directories, don't read sibling files, don't browse "
+        "anywhere else.\n\n"
+        "--- INPUT-START ---\n\n"
+        "# Corpus sample (your full context)\n\n"
         + corpus_sample
         + "\n\n--- INPUT-END ---\n"
     )
@@ -110,7 +115,7 @@ def list_themes_top_n_notes(n: int = 7, session: str = Depends(get_session)):
     for era_name, _, _ in eras:
         era_notes = by_era.get(era_name, [])
         if era_notes:
-            sampled.extend(spin_themes.folder_aware_sample(era_notes, n))
+            sampled.extend(spin_themes.folder_aware_sample(era_notes, n, corpus_id))
     sampled.sort(key=lambda x: x.get("date", ""))
     out = []
     for note in sampled:
@@ -181,148 +186,22 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
 
         sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
-        # ---- Phase 1: round-1 themes via `claude -p` ----
-        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8")
-        await send({"type": "status", "status": "generating"})
-
-        chunks: list[str] = []
-        result_evt: dict | None = None
-        proc: asyncio.subprocess.Process | None = None
-        side_tasks: list[asyncio.Task] = []
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "claude", "-p",
-                "--model", model,
-                "--system-prompt", themes_r1_prompt,
-                "--output-format", "stream-json",
-                "--include-partial-messages",
-                "--verbose",
-                "--no-session-persistence",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=sub_env,
-            )
-            assert (
-                proc.stdin is not None
-                and proc.stdout is not None
-                and proc.stderr is not None
-            )
-
-            async def feed_stdin():
-                proc.stdin.write(full_user_msg.encode("utf-8"))
-                await proc.stdin.drain()
-                proc.stdin.close()
-
-            async def pipe_stderr():
-                async for raw in proc.stderr:
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if line:
-                        await send({"type": "log", "text": f"stderr: {line}"})
-
-            async def heartbeat():
-                start = asyncio.get_running_loop().time()
-                while True:
-                    await asyncio.sleep(15)
-                    elapsed = int(asyncio.get_running_loop().time() - start)
-                    streamed = sum(len(c) for c in chunks)
-                    await send({
-                        "type": "log",
-                        "text": (
-                            f"… still working ({elapsed}s elapsed, "
-                            f"{streamed} chars streamed)"
-                        ),
-                    })
-
-            stdin_task = asyncio.create_task(feed_stdin())
-            side_tasks.append(asyncio.create_task(pipe_stderr()))
-            side_tasks.append(asyncio.create_task(heartbeat()))
-
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                t = evt.get("type")
-                if t == "stream_event":
-                    inner = evt.get("event", {})
-                    if inner.get("type") == "content_block_delta":
-                        delta = inner.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text = delta.get("text", "")
-                            if text:
-                                chunks.append(text)
-                                await send({"type": "narration", "text": text})
-                elif t == "system":
-                    sub = evt.get("subtype")
-                    if sub == "init":
-                        await send({
-                            "type": "log",
-                            "text": (
-                                f"claude initialized · model="
-                                f"{evt.get('model', '?')} · session="
-                                f"{evt.get('session_id', '?')}"
-                            ),
-                        })
-                    elif sub == "status":
-                        await send({
-                            "type": "log",
-                            "text": f"status · {evt.get('status', '')}",
-                        })
-                elif t == "result":
-                    result_evt = evt
-
-            await stdin_task
-            rc = await proc.wait()
-        except Exception as e:
-            if chunks:
-                (run_dir / "output.partial.md").write_text("".join(chunks), encoding="utf-8")
-            await send({"type": "error", "message": f"round-1 failed: {type(e).__name__}: {e}"})
-            return
-        finally:
-            for tk in side_tasks:
-                tk.cancel()
-            # Reap on any exit path (success, exception, or task cancellation
-            # from a WS disconnect). Without this, the `claude -p` subprocess
-            # outlives the handler and accumulates as orphans.
-            if proc is not None and proc.returncode is None:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-
-        round1_text = "".join(chunks)
-        (run_dir / "output.md").write_text(round1_text, encoding="utf-8")
-
-        if rc != 0 and not result_evt:
-            stderr = ""
-            if proc.stderr:
-                try:
-                    stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-            await send({"type": "error", "message": f"claude exited {rc}: {stderr[-500:]}"})
-            return
-
-        cumulative_cost += float((result_evt or {}).get("total_cost_usd", 0) or 0)
-        r1_usage = (result_evt or {}).get("usage", {}) if result_evt else {}
-
-        await send({"type": "draft_update", "kind": "output", "content": round1_text})
-        await send({
-            "type": "turn_end",
-            "cost_usd": cumulative_cost,
-            "stop_reason": (result_evt or {}).get("stop_reason", "") or "",
-            "usage": r1_usage,
-        })
-
-        # ---- Phase 2: curate chat ----
-        kickoff = _build_curate_kickoff(run_dir_abs)
-        curate_system = CURATE_PATH.read_text(encoding="utf-8").replace(
+        # Single-phase: round-1 generation + curate happen inside one SDK
+        # session. System prompt combines both; kickoff inlines the corpus
+        # sample and instructs the agent to generate round-1, then enter
+        # curate orientation. Streaming is visible from the first token.
+        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8").replace(
             "__SUBJECT__", wb.SUBJECT_NAME
         )
+        curate_prompt = CURATE_PATH.read_text(encoding="utf-8").replace(
+            "__SUBJECT__", wb.SUBJECT_NAME
+        )
+        combined_system = (
+            themes_r1_prompt.rstrip("\n")
+            + "\n\n---\n\n"
+            + curate_prompt
+        )
+        kickoff = _build_themes_kickoff(run_dir_abs, full_user_msg)
 
         runs_parent_abs = run_dir_abs.parent
         settings = {
@@ -388,7 +267,7 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
 
         options = ClaudeAgentOptions(
             model=model,
-            system_prompt=curate_system,
+            system_prompt=combined_system,
             permission_mode="acceptEdits",
             allowed_tools=["Read", "Edit", "Write"],
             settings=str(settings_path),
@@ -402,51 +281,71 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
             async def drain_turn():
                 nonlocal cumulative_cost
                 await send({"type": "status", "status": "generating"})
-                async for msg in client.receive_response():
-                    if isinstance(msg, StreamEvent):
-                        event = msg.event if hasattr(msg, "event") else {}
-                        etype = event.get("type")
-                        if etype == "content_block_delta":
-                            delta = event.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text", "")
-                                if text:
-                                    await send({"type": "narration", "text": text})
-                    elif isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, ToolUseBlock):
-                                await send({
-                                    "type": "tool_use",
-                                    "id": block.id,
-                                    "name": block.name,
-                                    "input": block.input or {},
-                                })
-                    elif isinstance(msg, UserMessage):
-                        for block in msg.content if isinstance(msg.content, list) else []:
-                            if isinstance(block, ToolResultBlock):
-                                tr = block.content
-                                if isinstance(tr, list):
-                                    tr = "".join(
-                                        getattr(x, "text", "") or str(x) for x in tr
-                                    )
-                                tr = str(tr or "")
-                                if len(tr) > 600:
-                                    tr = tr[:600] + "…"
-                                await send({
-                                    "type": "tool_result",
-                                    "id": block.tool_use_id,
-                                    "is_error": bool(block.is_error),
-                                    "text": tr,
-                                })
-                    elif isinstance(msg, ResultMessage):
-                        cumulative_cost = msg.total_cost_usd or cumulative_cost
-                        usage = getattr(msg, "usage", None) or {}
+                narration_chars = 0
+
+                async def heartbeat():
+                    start = asyncio.get_running_loop().time()
+                    while True:
+                        await asyncio.sleep(30)
+                        elapsed = int(asyncio.get_running_loop().time() - start)
                         await send({
-                            "type": "turn_end",
-                            "cost_usd": cumulative_cost,
-                            "stop_reason": getattr(msg, "stop_reason", "") or "",
-                            "usage": usage,
+                            "type": "log",
+                            "text": (
+                                f"… still working ({elapsed}s elapsed, "
+                                f"{narration_chars} chars streamed)"
+                            ),
                         })
+
+                hb_task = asyncio.create_task(heartbeat())
+                try:
+                    async for msg in client.receive_response():
+                        if isinstance(msg, StreamEvent):
+                            event = msg.event if hasattr(msg, "event") else {}
+                            etype = event.get("type")
+                            if etype == "content_block_delta":
+                                delta = event.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    text = delta.get("text", "")
+                                    if text:
+                                        narration_chars += len(text)
+                                        await send({"type": "narration", "text": text})
+                        elif isinstance(msg, AssistantMessage):
+                            for block in msg.content:
+                                if isinstance(block, ToolUseBlock):
+                                    await send({
+                                        "type": "tool_use",
+                                        "id": block.id,
+                                        "name": block.name,
+                                        "input": block.input or {},
+                                    })
+                        elif isinstance(msg, UserMessage):
+                            for block in msg.content if isinstance(msg.content, list) else []:
+                                if isinstance(block, ToolResultBlock):
+                                    tr = block.content
+                                    if isinstance(tr, list):
+                                        tr = "".join(
+                                            getattr(x, "text", "") or str(x) for x in tr
+                                        )
+                                    tr = str(tr or "")
+                                    if len(tr) > 600:
+                                        tr = tr[:600] + "…"
+                                    await send({
+                                        "type": "tool_result",
+                                        "id": block.tool_use_id,
+                                        "is_error": bool(block.is_error),
+                                        "text": tr,
+                                    })
+                        elif isinstance(msg, ResultMessage):
+                            cumulative_cost = msg.total_cost_usd or cumulative_cost
+                            usage = getattr(msg, "usage", None) or {}
+                            await send({
+                                "type": "turn_end",
+                                "cost_usd": cumulative_cost,
+                                "stop_reason": getattr(msg, "stop_reason", "") or "",
+                                "usage": usage,
+                            })
+                finally:
+                    hb_task.cancel()
                 await send({"type": "status", "status": "awaiting_reply"})
 
             await client.query(kickoff)
