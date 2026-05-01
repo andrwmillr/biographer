@@ -364,18 +364,40 @@ async def session(ws: WebSocket):
 
     try:
         era = first["era"]
-        try:
-            inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))
-        except HTTPException as e:
-            await send({"type": "error", "message": e.detail})
-            return
-
         model_key = first.get("model")
         model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
-        run_dir = inputs["run_dir"]
-        run_dir_abs = run_dir.resolve()
-        kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"], corpus_id)
+        # Resume path: client passes a previously-emitted run_dir. We
+        # skip _prepare_run (which would create a new dir + write
+        # user.md) and use whatever's already on disk. output.md +
+        # thinking.md (if present) become the resume kickoff context.
+        resume_run_rel = first.get("run_id") if first.get("resume") else None
+        if resume_run_rel:
+            from core.resume import build_era_resume_kickoff
+            run_dir = REPO / resume_run_rel
+            if not run_dir.is_dir():
+                await send({"type": "error", "message": f"resume run_dir not found: {resume_run_rel}"})
+                return
+            run_dir_abs = run_dir.resolve()
+            kickoff = build_era_resume_kickoff(run_dir_abs, corpus_id)
+            inputs = {
+                "run_rel": resume_run_rel,
+                "notes_count": 0,
+                "prior_count": 0,
+                "digest_count": 0,
+                "future_count": 0,
+                "future_digest_count": 0,
+                "in_chars": len(kickoff),
+            }
+        else:
+            try:
+                inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))
+            except HTTPException as e:
+                await send({"type": "error", "message": e.detail})
+                return
+            run_dir = inputs["run_dir"]
+            run_dir_abs = run_dir.resolve()
+            kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"], corpus_id)
 
         runs_parent_abs = run_dir_abs.parent
         settings = {
@@ -406,6 +428,7 @@ async def session(ws: WebSocket):
             "future_chapters": inputs["future_count"],
             "future_digests": inputs["future_digest_count"],
             "input_chars": inputs["in_chars"],
+            "resumed": bool(resume_run_rel),
         })
 
         async def watch_files():

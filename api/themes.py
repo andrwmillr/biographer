@@ -230,11 +230,28 @@ async def themes_curate(ws: WebSocket):
         model_key = first.get("model")
         model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
-        prep = _prepare_themes_run(top_n=top_n, corpus_id=corpus_id)
-        run_dir = prep["run_dir"]
-        run_rel = prep["run_rel"]
-        full_user_msg = prep["full_user_msg"]
-        in_chars = prep["in_chars"]
+        # Resume path: client passes a previously-emitted run_dir. We
+        # skip _prepare_themes_run (which would create a new dir + write
+        # input.md) and use whatever's already on disk + the captured
+        # state.md as the kickoff context.
+        resume_run_rel = first.get("run_id") if first.get("resume") else None
+        if resume_run_rel:
+            from core.resume import build_themes_resume_kickoff
+            run_dir = REPO / resume_run_rel
+            if not run_dir.is_dir():
+                await reject(f"resume run_dir not found: {resume_run_rel}")
+                return
+            run_rel = resume_run_rel
+            full_user_msg = (run_dir / "input.md").read_text(encoding="utf-8") if (run_dir / "input.md").exists() else ""
+            in_chars = len(full_user_msg)
+            kickoff = build_themes_resume_kickoff(run_dir, corpus_id)
+        else:
+            prep = _prepare_themes_run(top_n=top_n, corpus_id=corpus_id)
+            run_dir = prep["run_dir"]
+            run_rel = prep["run_rel"]
+            full_user_msg = prep["full_user_msg"]
+            in_chars = prep["in_chars"]
+            kickoff = _build_themes_kickoff(run_dir, full_user_msg, corpus_id)
         run_dir_abs = run_dir
 
         await send({
@@ -243,6 +260,7 @@ async def themes_curate(ws: WebSocket):
             "run_dir": run_rel,
             "top_n": top_n,
             "input_chars": in_chars,
+            "resumed": bool(resume_run_rel),
         })
 
         sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
@@ -258,7 +276,6 @@ async def themes_curate(ws: WebSocket):
             + "\n\n---\n\n"
             + curate_prompt
         )
-        kickoff = _build_themes_kickoff(run_dir_abs, full_user_msg, corpus_id)
 
         runs_parent_abs = run_dir_abs.parent
         settings = {
@@ -338,6 +355,11 @@ async def themes_curate(ws: WebSocket):
             async def drain_turn():
                 nonlocal cumulative_cost
                 await send({"type": "status", "status": "generating"})
+                # Capture this turn's narration for the resume snapshot
+                # (state.md). Themes doesn't have a Write-tool-driven
+                # output.md the way era does, so we save the agent's
+                # last response on every turn for tier-2.5 resume.
+                turn_narration: list[str] = []
                 async for msg in client.receive_response():
                     if isinstance(msg, StreamEvent):
                         event = msg.event if hasattr(msg, "event") else {}
@@ -347,6 +369,7 @@ async def themes_curate(ws: WebSocket):
                             if delta.get("type") == "text_delta":
                                 text = delta.get("text", "")
                                 if text:
+                                    turn_narration.append(text)
                                     await send({"type": "narration", "text": text})
                     elif isinstance(msg, AssistantMessage):
                         for block in msg.content:
@@ -383,6 +406,16 @@ async def themes_curate(ws: WebSocket):
                             "stop_reason": getattr(msg, "stop_reason", "") or "",
                             "usage": usage,
                         })
+                # Persist this turn's full narration as the resume
+                # snapshot. The CURATE prompt tells the agent to start
+                # every response with the `## Current state` block, so
+                # this file always reflects the latest curation state.
+                full_text = "".join(turn_narration).strip()
+                if full_text:
+                    try:
+                        (run_dir_abs / "state.md").write_text(full_text, encoding="utf-8")
+                    except Exception:
+                        pass  # snapshotting is best-effort; never fails the turn
                 await send({"type": "status", "status": "awaiting_reply"})
 
             await client.query(kickoff)

@@ -44,6 +44,18 @@ const PANE_TITLES: Record<PaneId, string> = {
   draft: "Draft",
   notes: "Notes",
 };
+// Per-pane initial size used on first-ever mount. After that, react-
+// resizable-panels' autoSaveId persists user adjustments to localStorage
+// and restores them across chapter switches and reloads.
+const PANE_DEFAULT_SIZE: Record<PaneId, number> = {
+  chat: 48.5,
+  draft: 3,
+  notes: 48.5,
+};
+// One-shot flag: the auto-expand-draft-on-first-content effect sets this
+// the first time it fires, so it doesn't override the user's saved
+// layout on later chapter loads.
+const DRAFT_AUTO_EXPANDED_KEY = "biographer-draft-auto-expanded";
 
 const MODELS = ["opus-4.7", "opus-4.6", "sonnet-4.6"] as const;
 
@@ -77,9 +89,11 @@ export function ChatWorkspace({
   const [finalized, setFinalized] = useState<FinalizedInfo | null>(null);
   const [highlightDate, setHighlightDate] = useState<string>("");
 
-  // Pane collapse state is in-memory (resets on remount). Draft starts
-  // collapsed — it's empty until the agent produces output. Auto-expands on
-  // first draft content (see effect below).
+  // Pane collapse state. Draft starts collapsed on first-ever mount —
+  // it's empty until the agent produces output, and the auto-expand
+  // effect below opens it on first content. After that, autoSaveId on
+  // the PanelGroup restores layout (and we derive collapsed from the
+  // restored sizes via the Panel onCollapse/onExpand callbacks).
   const [collapsed, setCollapsed] = useState<Record<PaneId, boolean>>({
     chat: false,
     draft: true,
@@ -98,6 +112,26 @@ export function ChatWorkspace({
   // Latches once we've auto-expanded draft on first content. Prevents
   // re-expanding if the user manually collapses it later in the session.
   const draftAutoExpandedRef = useRef<boolean>(false);
+
+  // Tier 2.5 resume: remember the run_dir of the in-flight session so
+  // we can reconnect with `resume: true, run_id: …` if the WS dies
+  // (tab put to sleep, network blip, etc.). Keyed in localStorage by
+  // workflow + scope so era and themes don't collide.
+  const runIdStorageKey =
+    scope.kind === "era"
+      ? `workspace_run_era_${scope.era}`
+      : `workspace_run_themes_default`;
+  const runIdRef = useRef<string | null>(
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(runIdStorageKey)
+      : null,
+  );
+  function setRunId(runId: string | null) {
+    runIdRef.current = runId;
+    if (typeof window === "undefined") return;
+    if (runId) window.localStorage.setItem(runIdStorageKey, runId);
+    else window.localStorage.removeItem(runIdStorageKey);
+  }
 
   const wsRef = useRef<WebSocket | null>(null);
   const narrationBufRef = useRef<string>("");
@@ -119,13 +153,6 @@ export function ChatWorkspace({
     return () => clearInterval(id);
   }, [wsStatus]);
 
-  // Apply the initial collapsed-draft layout on mount. autoSaveId would
-  // otherwise restore a previous 33/33/33 layout, leaving the rail rendered
-  // inside a 33%-wide slot.
-  useEffect(() => {
-    panelGroupRef.current?.setLayout([48.5, 3, 48.5]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Esc closes the pop-out overlay.
   useEffect(() => {
@@ -137,14 +164,45 @@ export function ChatWorkspace({
     return () => document.removeEventListener("keydown", onKey);
   }, [popOut]);
 
-  // Auto-collapse-chat / expand-draft on first draft content arrival.
-  // Mirror image of the empty-draft default: when there's something to
-  // read, give it the room. Latches via ref so manual toggles later
-  // don't get fought by re-collapsing.
+  // Tier 2.5 reconnect: when the tab becomes visible again and the WS
+  // is dead but we have a remembered run_dir for this scope, try to
+  // reconnect with `resume: true` so the agent picks up from disk
+  // state. Tab-switching is the most common cause of unintended drops
+  // (browser timer throttling → tunnel idle timeout → WS reaped).
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      const ws = wsRef.current;
+      const wsAlive = ws && ws.readyState <= WebSocket.OPEN;
+      if (wsAlive) return;
+      const runId = runIdRef.current;
+      if (!runId) return;
+      // Only reconnect from the terminal states startSession will accept.
+      // If we're mid-generating (very unlikely with a dead ws but…), skip.
+      if (wsStatus === "generating" || wsStatus === "connecting") return;
+      startSession({ resumeRunId: runId });
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsStatus]);
+
+  // Auto-expand draft on first draft content arrival — but only the
+  // very first time the workspace has ever shown a draft on this device.
+  // The flag below latches in localStorage; subsequent mounts let the
+  // PanelGroup's autoSaveId restore whatever the user has chosen instead
+  // of overriding it every time a chapter loads.
   useEffect(() => {
     if (!draft) return;
     if (draftAutoExpandedRef.current) return;
+    if (localStorage.getItem(DRAFT_AUTO_EXPANDED_KEY)) {
+      draftAutoExpandedRef.current = true;
+      return;
+    }
     draftAutoExpandedRef.current = true;
+    try {
+      localStorage.setItem(DRAFT_AUTO_EXPANDED_KEY, "1");
+    } catch {}
     panelGroupRef.current?.setLayout([3, 48.5, 48.5]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
@@ -251,10 +309,15 @@ export function ChatWorkspace({
     });
   }
 
-  function startSession() {
+  function startSession(opts: { resumeRunId?: string } = {}) {
     if (wsStatus !== "idle" && wsStatus !== "done" && wsStatus !== "error") return;
-    setLog([]);
-    setDraft("");
+    const resuming = !!opts.resumeRunId;
+    if (!resuming) {
+      // Fresh session: clear all state. Resume keeps the existing draft
+      // visible while the agent rehydrates from disk.
+      setLog([]);
+      setDraft("");
+    }
     setReplyText("");
     draftAutoExpandedRef.current = false;
     setSpawned(null);
@@ -283,10 +346,17 @@ export function ChatWorkspace({
     ws.onopen = () => {
       const session = getSession() || "";
       const token = getAuthToken() || "";
+      const base: Record<string, unknown> = { type: "start", session, token, model };
+      if (resuming) {
+        base.resume = true;
+        base.run_id = opts.resumeRunId;
+      }
+      // Workflow-specific fields aren't needed on resume — server uses
+      // what's already in the run_dir.
       const startMsg =
         scope.kind === "era"
-          ? { type: "start", session, token, era: scope.era, future, model }
-          : { type: "start", session, token, top_n: topN, model };
+          ? { ...base, era: scope.era, future }
+          : { ...base, top_n: topN };
       ws.send(JSON.stringify(startMsg));
       pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -309,6 +379,8 @@ export function ChatWorkspace({
       if (t === "spawned") {
         const info = payload as SpawnedInfo;
         setSpawned(info);
+        // Persist run_dir for resume on reconnect.
+        if (info.run_dir) setRunId(info.run_dir);
         const summary =
           scope.kind === "era"
             ? `reading ${info.notes ?? 0} notes` +
@@ -375,6 +447,8 @@ export function ChatWorkspace({
         setFinalized(info);
         setDraft(info.content);
         setPhase("finalized");
+        // Locked — no point resuming this run after disconnect.
+        setRunId(null);
         if (onFinalized) onFinalized(info);
       } else if (t === "done") {
         flushNarration();
@@ -896,14 +970,14 @@ export function ChatWorkspace({
       <div className="h-[80vh] rounded border border-stone-200 overflow-hidden bg-white">
         <PanelGroup
           direction="horizontal"
-          autoSaveId="workspace_panels_v1"
+          autoSaveId="workspace_panels_v2"
           ref={panelGroupRef}
         >
           {PANE_ORDER.map((id, idx) => (
             <Fragment key={id}>
               <Panel
                 id={id}
-                defaultSize={100 / PANE_ORDER.length}
+                defaultSize={PANE_DEFAULT_SIZE[id]}
                 minSize={12}
                 collapsible
                 collapsedSize={3}
