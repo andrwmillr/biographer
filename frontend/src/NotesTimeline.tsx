@@ -22,6 +22,18 @@ function formatMonth(monthKey: string): string {
   });
 }
 
+// Frontmatter-less corpora (e.g. Thoreau, Alcott) have empty titles.
+// Show a flattened opening of the body instead of "(untitled)" so the
+// timeline reads as distinct entries.
+function bodyExcerpt(body: string, maxLen = 80): string {
+  if (!body) return "";
+  const flat = body.replace(/\s+/g, " ").trim();
+  if (flat.length <= maxLen) return flat;
+  const cut = flat.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut) + "…";
+}
+
 type NotesTimelineProps = {
   notes: Note[];
   loading: boolean;
@@ -208,6 +220,7 @@ export function NotesTimeline({
                           <div className="min-w-0 flex-1 flex flex-col items-start">
                             {group.notes.map((n) => {
                               const isSelected = selected?.rel === n.rel;
+                              const excerpt = n.title || bodyExcerpt(n.body);
                               return (
                                 <button
                                   key={n.rel}
@@ -220,9 +233,17 @@ export function NotesTimeline({
                                   }
                                   title={`${n.date.slice(0, 10)} · ${n.label}${
                                     n.source ? ` · ${n.source}` : ""
-                                  } · ${n.title || "(untitled)"}`}
+                                  } · ${excerpt || "(untitled)"}`}
                                 >
-                                  {n.title || (
+                                  {excerpt ? (
+                                    <span
+                                      className={
+                                        n.title ? "" : "text-stone-500"
+                                      }
+                                    >
+                                      {excerpt}
+                                    </span>
+                                  ) : (
                                     <span className="italic text-stone-400">
                                       (untitled)
                                     </span>
@@ -256,11 +277,11 @@ export function NotesTimeline({
                     </span>
                   )}
                 </div>
-                <h2 className="mt-2 text-base font-serif text-stone-900">
-                  {selected.title || (
-                    <span className="text-stone-400 italic">(untitled)</span>
-                  )}
-                </h2>
+                {selected.title && (
+                  <h2 className="mt-2 text-base font-serif text-stone-900">
+                    {selected.title}
+                  </h2>
+                )}
                 {selected.editor_note && (
                   <div className="mt-2 text-xs text-amber-700">
                     ⚠ Editor note: {selected.editor_note}
