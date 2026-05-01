@@ -23,20 +23,24 @@ from fastapi.testclient import TestClient
 # conftest.py sets ADMIN_EMAILS in env before this module imports server.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_scripts"))
+import auth  # noqa: E402
+import config  # noqa: E402
+import corpora  # noqa: E402
 import server  # noqa: E402
 import write_biography as wb  # noqa: E402
 
 
-# ---- Test isolation: redirect both CORPORA_ROOT (server.py) AND
-# _CORPORA_BASE (wb) to a temp dir so reads/writes see the same tree.
-# Also redirect AUTH_STATE_PATH so test auth state doesn't clobber the
-# host's real ~/_auth/state.json.
+# ---- Test isolation: redirect both config.CORPORA_ROOT (server) AND
+# wb._CORPORA_BASE to a temp dir so reads/writes see the same tree.
+# Also redirect config.AUTH_STATE_PATH so test auth state doesn't clobber
+# the host's real ~/_auth/state.json. Helpers in auth.py read these via
+# config attribute access, so post-import mutation propagates correctly.
 
 _test_corpora_root = Path(tempfile.mkdtemp(prefix="biographer_test_"))
 _test_auth_dir = Path(tempfile.mkdtemp(prefix="biographer_test_auth_"))
-server.CORPORA_ROOT = _test_corpora_root
-server.AUTH_DIR = _test_auth_dir
-server.AUTH_STATE_PATH = _test_auth_dir / "state.json"
+config.CORPORA_ROOT = _test_corpora_root
+config.AUTH_DIR = _test_auth_dir
+config.AUTH_STATE_PATH = _test_auth_dir / "state.json"
 wb._CORPORA_BASE = _test_corpora_root
 
 
@@ -53,13 +57,13 @@ def _issue_test_token(email: str = "test@example.com") -> str:
     import secrets as _secrets
 
     token = _secrets.token_urlsafe(32)
-    state = server._load_auth()
+    state = auth._load_auth()
     state["sessions"][token] = {
         "email": email,
-        "expires": server._now_ts() + 3600,
+        "expires": auth._now_ts() + 3600,
     }
     state["users"].setdefault(email, [])
-    server._save_auth(state)
+    auth._save_auth(state)
     return token
 
 
@@ -80,14 +84,14 @@ def test_corpus_dir_rejects_missing_andrew_dir():
     """`andrew` passes the slug-shape gate but must 401 when the dir doesn't
     exist on disk (it doesn't, in the test tempdir)."""
     with pytest.raises(HTTPException) as ex:
-        server.corpus_dir("andrew")
+        corpora.corpus_dir("andrew")
     assert ex.value.status_code == 401
 
 
 def test_corpus_dir_rejects_random_strings():
     for bad in ["foo", "c_short", "c_TOOSHORT", "../etc", "", "_other_legacy"]:
         with pytest.raises(HTTPException) as ex:
-            server.corpus_dir(bad)
+            corpora.corpus_dir(bad)
         assert ex.value.status_code == 401, f"expected 401 for {bad!r}"
 
 
@@ -209,7 +213,7 @@ def test_oversized_zip_rejected(client: TestClient, auth_token: str):
     """Zip-bomb defense: huge uncompressed total is rejected before extract."""
     # Build a pathological zip where one member declares enormous file_size.
     # We compress a long string of zeros to test the uncompressed-size guard.
-    big_body = b"\0" * (server.MAX_UNCOMPRESSED_BYTES + 1024)
+    big_body = b"\0" * (config.MAX_UNCOMPRESSED_BYTES + 1024)
     zip_bytes = _build_zip({"huge.md": big_body.decode("latin-1")})
     r = client.post(
         "/import/notes",
@@ -271,14 +275,14 @@ def test_is_sample_corpus_helper():
     _lay_down_sample(sample_slug)
     _lay_down_sample(not_sample_slug, sample=False)
 
-    assert server.is_sample_corpus(sample_slug) is True
-    assert server.is_sample_corpus(not_sample_slug) is False
+    assert corpora.is_sample_corpus(sample_slug) is True
+    assert corpora.is_sample_corpus(not_sample_slug) is False
 
     # Bad shapes never resolve.
-    assert server.is_sample_corpus("andrew") is False
-    assert server.is_sample_corpus("c_short") is False
-    assert server.is_sample_corpus("c_NOTHEXNOTHEXNO") is False
-    assert server.is_sample_corpus("c_ffffffffffffffff") is False  # no dir
+    assert corpora.is_sample_corpus("andrew") is False
+    assert corpora.is_sample_corpus("c_short") is False
+    assert corpora.is_sample_corpus("c_NOTHEXNOTHEXNO") is False
+    assert corpora.is_sample_corpus("c_ffffffffffffffff") is False  # no dir
 
 
 def test_samples_endpoint_lists_sample_corpora(client: TestClient):
@@ -393,7 +397,7 @@ def test_sample_flag_does_not_leak_to_andrew(client: TestClient):
     """Even if andrew/_meta.json had `sample: true`, the andrew slug must
     not be classified as a sample (otherwise it would silently become
     read-only). The slug-shape gate already excludes it — this confirms."""
-    assert server.is_sample_corpus("andrew") is False
+    assert corpora.is_sample_corpus("andrew") is False
 
 
 def test_non_sample_corpus_still_requires_auth(client: TestClient):
