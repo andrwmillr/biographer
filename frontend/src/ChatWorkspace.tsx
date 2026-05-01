@@ -91,6 +91,10 @@ export function ChatWorkspace({
     notes: null,
   });
   const panelGroupRef = useRef<ImperativePanelGroupHandle | null>(null);
+  // Pop-out: when set, the matching pane renders in a full-screen
+  // overlay for roomier reading/interaction. Original pane shows a
+  // "popped out" placeholder so content isn't duplicated.
+  const [popOut, setPopOut] = useState<PaneId | null>(null);
   // Latches once we've auto-expanded draft on first content. Prevents
   // re-expanding if the user manually collapses it later in the session.
   const draftAutoExpandedRef = useRef<boolean>(false);
@@ -122,6 +126,16 @@ export function ChatWorkspace({
     panelGroupRef.current?.setLayout([48.5, 3, 48.5]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Esc closes the pop-out overlay.
+  useEffect(() => {
+    if (popOut === null) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPopOut(null);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [popOut]);
 
   // Auto-expand draft on first content arrival. Latches via ref so a manual
   // collapse later doesn't get fought by re-expansion.
@@ -670,7 +684,7 @@ export function ChatWorkspace({
     return renderNotesBody();
   }
 
-  function PaneHeader({ id }: { id: PaneId }) {
+  function PaneHeader({ id, popped = false }: { id: PaneId; popped?: boolean }) {
     const isCollapsed = collapsed[id];
     return (
       <div className="flex items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
@@ -687,14 +701,26 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
-        <button
-          onClick={() => togglePaneCollapse(id)}
-          className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-200 hover:text-stone-700"
-          title={isCollapsed ? "expand pane" : "collapse pane"}
-          aria-label={isCollapsed ? "expand pane" : "collapse pane"}
-        >
-          {isCollapsed ? "+" : "−"}
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setPopOut(popped ? null : id)}
+            className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-200 hover:text-stone-700"
+            title={popped ? "exit full-screen (Esc)" : "open full-screen"}
+            aria-label={popped ? "exit full-screen" : "open full-screen"}
+          >
+            {popped ? "×" : "⛶"}
+          </button>
+          {!popped && (
+            <button
+              onClick={() => togglePaneCollapse(id)}
+              className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-200 hover:text-stone-700"
+              title={isCollapsed ? "expand pane" : "collapse pane"}
+              aria-label={isCollapsed ? "expand pane" : "collapse pane"}
+            >
+              {isCollapsed ? "+" : "−"}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -878,6 +904,16 @@ export function ChatWorkspace({
               >
                 {collapsed[id] ? (
                   <CollapsedRail id={id} />
+                ) : popOut === id ? (
+                  <>
+                    <PaneHeader id={id} />
+                    <button
+                      onClick={() => setPopOut(null)}
+                      className="flex flex-1 items-center justify-center text-xs text-stone-400 hover:text-stone-700 hover:bg-stone-50"
+                    >
+                      (popped out — click to restore)
+                    </button>
+                  </>
                 ) : (
                   <>
                     <PaneHeader id={id} />
@@ -894,6 +930,23 @@ export function ChatWorkspace({
           ))}
         </PanelGroup>
       </div>
+
+      {/* ---- Pop-out overlay ---- */}
+      {popOut !== null && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-stone-900/40 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPopOut(null);
+          }}
+        >
+          <div className="flex h-full max-h-[95vh] w-full max-w-[95vw] flex-col rounded border border-stone-200 bg-white shadow-2xl">
+            <PaneHeader id={popOut} popped />
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {renderPaneContent(popOut)}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
