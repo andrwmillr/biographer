@@ -834,7 +834,7 @@ export function ChatWorkspace({
             <div className="px-6 pt-2 pb-3 text-center font-serif text-lg text-stone-800">
               {draftHeaderSlot}
             </div>
-            <div className="mx-12 h-px bg-gradient-to-r from-transparent via-stone-300 to-transparent" />
+            <div className="mx-[11px] h-px bg-[linear-gradient(to_right,transparent_0%,#d6d3d1_6%,#d6d3d1_94%,transparent_100%)]" />
           </div>
         )}
         <div className="px-6 pb-6 pt-3">
