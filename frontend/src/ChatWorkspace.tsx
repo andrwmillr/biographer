@@ -814,6 +814,11 @@ export function ChatWorkspace({
             {phase === "pre-gen" && (
               <span className="text-stone-400">not started</span>
             )}
+            {cost > 0 && (
+              <span className="ml-auto font-mono text-[11px] tabular-nums text-stone-400">
+                ${cost.toFixed(4)}
+              </span>
+            )}
           </div>
           {renderPrompter()}
         </div>
@@ -879,11 +884,6 @@ export function ChatWorkspace({
       <div className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
         <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500 shrink-0">
           {PANE_TITLES[id]}
-          {id === "chat" && cost > 0 && (
-            <span className="ml-1 normal-case tracking-normal text-stone-400">
-              (${cost.toFixed(4)})
-            </span>
-          )}
           {id === "draft" && draft && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
               ({draft.length.toLocaleString()} ch)
