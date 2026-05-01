@@ -554,19 +554,43 @@ export function ChatWorkspace({
 
   function sendStop() {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      // Send stop and let the server close the WS after handling it.
-      // If we close ourselves, the close frame races the stop message
-      // and the server can see the disconnect first — treating it as a
-      // Tier 3 detach (session keeps running) rather than an explicit
-      // shutdown.
-      ws.send(JSON.stringify({ type: "stop" }));
+    if (ws) {
+      if (ws.readyState === WebSocket.OPEN) {
+        // Send stop and let the server close the WS after handling it.
+        // If we close ourselves, the close frame races the stop message
+        // and the server can see the disconnect first — treating it as
+        // a Tier 3 detach (session keeps running) rather than an
+        // explicit shutdown.
+        ws.send(JSON.stringify({ type: "stop" }));
+      }
+      // Detach handlers so any in-flight messages or the eventual
+      // server-initiated close don't race with our state reset below.
+      // (Without this, ws.onclose would flip wsStatus back to "done"
+      // milliseconds after we set it to "idle".)
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
     }
+    wsRef.current = null;
     // Clear runId regardless: even if the stop message gets dropped, we
     // don't want the next mount-effect to auto-attach to the abandoned
     // session. GC will reap it after 30 min.
     setRunId(null);
-    setWsStatus("done");
+    // Reset the workspace to its initial state so the prompter goes
+    // back to "Press ▶ to start…". `cost` survives so the user keeps
+    // the running tally of what they've spent on this scope.
+    setWsStatus("idle");
+    setPhase("pre-gen");
+    setLog([]);
+    setDraft("");
+    setSpawned(null);
+    setFinalized(null);
+    setReplyText("");
+    setError("");
+    setWsElapsed(0);
+    sawFirstAwaitingRef.current = false;
+    resumedRef.current = false;
+    narrationBufRef.current = "";
   }
 
   function handleCiteClick(dateKey: string) {
