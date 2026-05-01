@@ -690,6 +690,11 @@ export function ChatWorkspace({
       <div className="flex items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
         <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500">
           {PANE_TITLES[id]}
+          {id === "chat" && cost > 0 && (
+            <span className="ml-1 normal-case tracking-normal text-stone-400">
+              (${cost.toFixed(4)})
+            </span>
+          )}
           {id === "draft" && draft && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
               ({draft.length.toLocaleString()} ch)
@@ -840,31 +845,6 @@ export function ChatWorkspace({
       {notesError && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {notesError}
-        </div>
-      )}
-
-      {/* ---- Run/cost metadata ---- */}
-      {(spawned || cost > 0) && (
-        <div className="mb-3 flex items-center gap-3 font-mono text-[11px] text-stone-400">
-          {spawned?.run_dir && <span>run: {spawned.run_dir}</span>}
-          {spawned?.input_chars != null && spawned.input_chars > 0 && (
-            <span>· {spawned.input_chars.toLocaleString()} input chars</span>
-          )}
-          {scope.kind === "era" && spawned?.notes != null && (
-            <span>
-              · {spawned.notes} notes
-              {spawned.prior_chapters
-                ? ` + ${spawned.prior_chapters} prior`
-                : ""}
-              {spawned.future_chapters
-                ? ` + ${spawned.future_chapters} future`
-                : ""}
-            </span>
-          )}
-          {scope.kind === "themes" && spawned?.top_n != null && (
-            <span>· top-{spawned.top_n}</span>
-          )}
-          {cost > 0 && <span>· ${cost.toFixed(4)}</span>}
         </div>
       )}
 
