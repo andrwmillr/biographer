@@ -146,6 +146,15 @@ export function ChatWorkspace({
   // from the model during prompt processing).
   const [wsElapsed, setWsElapsed] = useState<number>(0);
   const wsTurnStartRef = useRef<number>(0);
+  // Tracks whether this connection was a resume. The progress estimator
+  // is anchored to a fresh kickoff time; on resume the agent may already
+  // be mid-turn or done, so showing a 0-anchored counter would mislead
+  // (and would mismatch any other tab still attached to the same session).
+  const resumedRef = useRef<boolean>(false);
+  // Last pong receipt timestamp. The ping loop closes the WS if pongs
+  // stop arriving so the visibilitychange handler can reconnect quickly,
+  // rather than waiting for the browser to notice TCP-level death.
+  const lastPongRef = useRef<number>(0);
 
   useEffect(() => {
     if (wsStatus !== "generating") return;
@@ -330,6 +339,8 @@ export function ChatWorkspace({
     narrationBufRef.current = "";
     sawFirstAwaitingRef.current = false;
     wsTurnStartRef.current = Date.now();
+    resumedRef.current = resuming;
+    lastPongRef.current = Date.now();
     setWsElapsed(0);
     setPhase("generating");
     setWsStatus("connecting");
@@ -340,9 +351,14 @@ export function ChatWorkspace({
     const ws = new WebSocket(`${wsBase}${wsPath}`);
     wsRef.current = ws;
 
-    // Keep-alive: ping every 25s so the connection survives idle
-    // intermediate timeouts (Cloudflare tunnel, browser App Nap, etc.)
-    // when the agent is silently processing a long prompt.
+    // Keep-alive: ping every 10s so idle intermediate timeouts (Cloudflare
+    // tunnel, browser App Nap) don't reap the WS, AND so we notice a dead
+    // connection quickly — if no pong arrives within ~25s we close the WS
+    // ourselves so the visibilitychange handler can reattach. Without this
+    // the browser only flips readyState→CLOSED after its own (slow) TCP
+    // timeout, which can take a minute or more.
+    const PING_MS = 10_000;
+    const PONG_DEADLINE_MS = 25_000;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
 
     ws.onopen = () => {
@@ -360,11 +376,18 @@ export function ChatWorkspace({
           ? { ...base, era: scope.era, future }
           : { ...base, top_n: topN };
       ws.send(JSON.stringify(startMsg));
+      lastPongRef.current = Date.now();
       pingTimer = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "ping" }));
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - lastPongRef.current > PONG_DEADLINE_MS) {
+          // Pongs stopped arriving — connection is dead in everything but
+          // name. Force-close so onclose fires and visibility handler can
+          // reconnect.
+          try { ws.close(); } catch {}
+          return;
         }
-      }, 25_000);
+        ws.send(JSON.stringify({ type: "ping" }));
+      }, PING_MS);
     };
 
     ws.onmessage = (ev) => {
@@ -376,6 +399,7 @@ export function ChatWorkspace({
       }
       const t = payload.type;
       if (t === "pong") {
+        lastPongRef.current = Date.now();
         return; // keep-alive ack; nothing to render
       }
       if (t === "spawned") {
@@ -646,6 +670,7 @@ export function ChatWorkspace({
             </span>
           )}
           {wsStatus === "generating" &&
+            !resumedRef.current &&
             !log.some((it) => it.kind === "narration") &&
             (() => {
               const inputChars = spawned?.input_chars ?? 0;
