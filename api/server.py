@@ -20,7 +20,9 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # fastapi-dev imports this file directly; put _web/ on sys.path so
@@ -33,8 +35,26 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from api import auth, corpora, drafts, imports, themes  # noqa: E402
+from core.session import gc_loop  # noqa: E402
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the session GC reaper. Sessions outlive their WS by design
+    (Tier 3 resilience), so something has to clean up sessions whose
+    user has truly walked away — gc_loop reaps after GC_IDLE_SECONDS."""
+    gc_task = asyncio.create_task(gc_loop())
+    try:
+        yield
+    finally:
+        gc_task.cancel()
+        try:
+            await gc_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

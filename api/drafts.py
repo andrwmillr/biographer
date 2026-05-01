@@ -1,11 +1,13 @@
 """Per-era chapter drafting.
 
 `POST /draft` is a one-shot SSE stream; `WS /session` is the bidirectional
-chat used by the unified workspace. The WS handler spawns a
-ClaudeSDKClient with permissions scoped to a fresh run dir, watches
-output.md / thinking.md / threads.md for changes (streamed as
-`draft_update` events), and on `finalize` promotes the run's output.md
-to chapters/<era_slug>.md.
+chat used by the unified workspace. The WS handler attaches the client to
+a `Session` (see core/session.py) which owns the SDK lifecycle, file
+watcher, and event log. On `finalize`, the server promotes the run's
+output.md to chapters/<era_slug>.md (skipping promotion for samples).
+
+Tier 3: the SDK lives on the Session, so a tab close / disconnect just
+detaches the WS — the agent keeps running and reattaches via run_id.
 """
 from __future__ import annotations
 
@@ -16,16 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from api.auth import _gc_auth, _load_auth
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ResultMessage,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
-from claude_agent_sdk.types import StreamEvent
+from claude_agent_sdk import ClaudeAgentOptions
 from api.config import KICKOFF_PATH, REPO
 from api.corpora import (
     _load_state,
@@ -39,6 +32,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from core import corpus as wb
+from core.session import Session, create_session, get_session
 
 router = APIRouter()
 
@@ -178,6 +172,33 @@ def _build_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | None) -> s
     )
 
 
+async def _era_watch(session: Session) -> None:
+    """Background loop: watch output.md / thinking.md / threads.md for
+    changes during a draft run and emit draft_update events. Era finalize
+    is server-side (chapter promote), not file-watch driven."""
+    paths = {
+        "output": session.run_dir / "output.md",
+        "thinking": session.run_dir / "thinking.md",
+        "threads": session.run_dir / "threads.md",
+    }
+    mtimes: dict[str, float] = {}
+    while True:
+        await asyncio.sleep(0.5)
+        for kind, p in paths.items():
+            try:
+                m = p.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if mtimes.get(kind) == m:
+                continue
+            mtimes[kind] = m
+            try:
+                content = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            await session.emit({"type": "draft_update", "kind": kind, "content": content})
+
+
 @router.post("/draft")
 async def draft(req: DraftRequest, session: str = Depends(require_writable)):
     corpus_id = _session_corpus_id(session)
@@ -307,9 +328,6 @@ async def draft(req: DraftRequest, session: str = Depends(require_writable)):
 @router.websocket("/session")
 async def session(ws: WebSocket):
     await ws.accept()
-    tasks: list[asyncio.Task] = []
-    run_dir: Path | None = None
-    cumulative_cost = 0.0
 
     async def send(obj: dict):
         try:
@@ -362,255 +380,156 @@ async def session(ws: WebSocket):
             return
     corpus_id = _session_corpus_id(session_slug)
 
+    sess: Session | None = None
+    era = first["era"]
     try:
-        era = first["era"]
-        model_key = first.get("model")
-        model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
-
-        # Resume path: client passes a previously-emitted run_dir. We
-        # skip _prepare_run (which would create a new dir + write
-        # user.md) and use whatever's already on disk. output.md +
-        # thinking.md (if present) become the resume kickoff context.
+        # Tier 3 hot resume: client passed a run_id that's still alive.
         resume_run_rel = first.get("run_id") if first.get("resume") else None
         if resume_run_rel:
-            from core.resume import build_era_resume_kickoff
-            run_dir = REPO / resume_run_rel
-            if not run_dir.is_dir():
-                await send({"type": "error", "message": f"resume run_dir not found: {resume_run_rel}"})
-                return
-            run_dir_abs = run_dir.resolve()
-            kickoff = build_era_resume_kickoff(run_dir_abs, corpus_id)
-            inputs = {
-                "run_rel": resume_run_rel,
-                "notes_count": 0,
-                "prior_count": 0,
-                "digest_count": 0,
-                "future_count": 0,
-                "future_digest_count": 0,
-                "in_chars": len(kickoff),
+            existing = get_session(resume_run_rel)
+            if existing is not None and existing.kind == "era" and existing.corpus_id == corpus_id:
+                sess = existing
+                await sess.attach(ws)
+
+        if sess is None:
+            model_key = first.get("model")
+            model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
+
+            # Tier 2.5 cold resume: rebuild kickoff from disk artifacts.
+            if resume_run_rel:
+                from core.resume import build_era_resume_kickoff
+                run_dir = REPO / resume_run_rel
+                if not run_dir.is_dir():
+                    await reject(f"resume run_dir not found: {resume_run_rel}")
+                    return
+                run_dir_abs = run_dir.resolve()
+                kickoff = build_era_resume_kickoff(run_dir_abs, corpus_id)
+                inputs = {
+                    "run_rel": resume_run_rel,
+                    "notes_count": 0,
+                    "prior_count": 0,
+                    "digest_count": 0,
+                    "future_count": 0,
+                    "future_digest_count": 0,
+                    "in_chars": len(kickoff),
+                }
+            else:
+                try:
+                    inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))
+                except HTTPException as e:
+                    await reject(e.detail)
+                    return
+                run_dir = inputs["run_dir"]
+                run_dir_abs = run_dir.resolve()
+                kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"], corpus_id)
+
+            runs_parent_abs = run_dir_abs.parent
+            settings = {
+                "permissions": {
+                    "deny": [
+                        f"Read({runs_parent_abs}/**)",
+                        f"Edit({runs_parent_abs}/**)",
+                        f"Write({runs_parent_abs}/**)",
+                    ],
+                    "allow": [
+                        f"Read({run_dir_abs}/**)",
+                        f"Edit({run_dir_abs}/**)",
+                        f"Write({run_dir_abs}/**)",
+                    ],
+                }
             }
-        else:
+            settings_path = run_dir / ".claude-settings.json"
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+            sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+            options = ClaudeAgentOptions(
+                model=model,
+                system_prompt=wb.CHAPTER_SYSTEM,
+                permission_mode="acceptEdits",
+                allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
+                settings=str(settings_path),
+                cwd=str(run_dir_abs),
+                include_partial_messages=True,
+                env=sub_env,
+            )
+
+            spawned_event = {
+                "type": "spawned",
+                "era": era,
+                "model": model,
+                "run_dir": inputs["run_rel"],
+                "notes": inputs["notes_count"],
+                "prior_chapters": inputs["prior_count"],
+                "prior_digests": inputs["digest_count"],
+                "future_chapters": inputs["future_count"],
+                "future_digests": inputs["future_digest_count"],
+                "input_chars": inputs["in_chars"],
+                "resumed": bool(resume_run_rel),
+            }
+
+            sess = await create_session(
+                run_id=inputs["run_rel"],
+                run_dir=run_dir_abs,
+                corpus_id=corpus_id,
+                kind="era",
+                options=options,
+                kickoff=kickoff,
+                spawned_event=spawned_event,
+                background_loop=_era_watch,
+            )
+            await sess.attach(ws)
+
+        # Receive loop. Session owns the SDK.
+        while True:
             try:
-                inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))
-            except HTTPException as e:
-                await send({"type": "error", "message": e.detail})
-                return
-            run_dir = inputs["run_dir"]
-            run_dir_abs = run_dir.resolve()
-            kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"], corpus_id)
-
-        runs_parent_abs = run_dir_abs.parent
-        settings = {
-            "permissions": {
-                "deny": [
-                    f"Read({runs_parent_abs}/**)",
-                    f"Edit({runs_parent_abs}/**)",
-                    f"Write({runs_parent_abs}/**)",
-                ],
-                "allow": [
-                    f"Read({run_dir_abs}/**)",
-                    f"Edit({run_dir_abs}/**)",
-                    f"Write({run_dir_abs}/**)",
-                ],
-            }
-        }
-        settings_path = run_dir / ".claude-settings.json"
-        settings_path.write_text(json.dumps(settings), encoding="utf-8")
-
-        await send({
-            "type": "spawned",
-            "era": era,
-            "model": model,
-            "run_dir": inputs["run_rel"],
-            "notes": inputs["notes_count"],
-            "prior_chapters": inputs["prior_count"],
-            "prior_digests": inputs["digest_count"],
-            "future_chapters": inputs["future_count"],
-            "future_digests": inputs["future_digest_count"],
-            "input_chars": inputs["in_chars"],
-            "resumed": bool(resume_run_rel),
-        })
-
-        async def watch_files():
-            paths = {
-                "output": run_dir / "output.md",
-                "thinking": run_dir / "thinking.md",
-                "threads": run_dir / "threads.md",
-            }
-            mtimes: dict[str, float] = {}
-            while True:
-                await asyncio.sleep(0.5)
-                for kind, p in paths.items():
-                    try:
-                        m = p.stat().st_mtime
-                    except FileNotFoundError:
-                        continue
-                    if mtimes.get(kind) != m:
-                        mtimes[kind] = m
-                        try:
-                            content = p.read_text(encoding="utf-8")
-                        except Exception:
-                            continue
-                        await send({"type": "draft_update", "kind": kind, "content": content})
-
-        watch_task = asyncio.create_task(watch_files())
-        tasks = [watch_task]
-
-        loop = asyncio.get_running_loop()
-
-        async def stderr_cb(line: str):
-            line = (line or "").strip()
-            if not line:
-                return
-            await send({"type": "log", "text": line})
-
-        def stderr_sync(line: str):
-            asyncio.run_coroutine_threadsafe(stderr_cb(line), loop)
-
-        sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-        options = ClaudeAgentOptions(
-            model=model,
-            system_prompt=wb.CHAPTER_SYSTEM,
-            permission_mode="acceptEdits",
-            allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
-            settings=str(settings_path),
-            cwd=str(run_dir_abs),
-            include_partial_messages=True,
-            stderr=stderr_sync,
-            env=sub_env,
-        )
-
-        async with ClaudeSDKClient(options=options) as client:
-            async def drain_turn():
-                nonlocal cumulative_cost
-                await send({"type": "status", "status": "generating"})
-                async for msg in client.receive_response():
-                    if isinstance(msg, StreamEvent):
-                        event = msg.event if hasattr(msg, "event") else {}
-                        etype = event.get("type")
-                        if etype == "content_block_delta":
-                            delta = event.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text", "")
-                                if text:
-                                    await send({"type": "narration", "text": text})
-                    elif isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, ToolUseBlock):
-                                await send({
-                                    "type": "tool_use",
-                                    "id": block.id,
-                                    "name": block.name,
-                                    "input": block.input or {},
-                                })
-                    elif isinstance(msg, UserMessage):
-                        for block in msg.content if isinstance(msg.content, list) else []:
-                            if isinstance(block, ToolResultBlock):
-                                tr = block.content
-                                if isinstance(tr, list):
-                                    tr = "".join(
-                                        getattr(x, "text", "") or str(x) for x in tr
-                                    )
-                                tr = str(tr or "")
-                                if len(tr) > 600:
-                                    tr = tr[:600] + "…"
-                                await send({
-                                    "type": "tool_result",
-                                    "id": block.tool_use_id,
-                                    "is_error": bool(block.is_error),
-                                    "text": tr,
-                                })
-                    elif isinstance(msg, ResultMessage):
-                        cumulative_cost = msg.total_cost_usd or cumulative_cost
-                        usage = getattr(msg, "usage", None) or {}
-                        await send({
-                            "type": "turn_end",
-                            "cost_usd": cumulative_cost,
-                            "stop_reason": getattr(msg, "stop_reason", "") or "",
-                            "usage": usage,
-                        })
-                await send({"type": "status", "status": "awaiting_reply"})
-
-            await client.query(kickoff)
-            turn_task = asyncio.create_task(drain_turn())
-
-            while True:
-                client_recv = asyncio.create_task(ws.receive_json())
-                done, _ = await asyncio.wait(
-                    [client_recv, turn_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                if client_recv in done:
-                    try:
-                        msg = client_recv.result()
-                    except WebSocketDisconnect:
-                        break
-                    mtype = msg.get("type")
-                    if mtype == "ping":
-                        # Keep-alive: client pings periodically so idle
-                        # tunnels (Cloudflare, browser App Nap, etc.)
-                        # don't reap the WS while the agent is silent.
-                        await send({"type": "pong"})
-                        continue
-                    if mtype == "stop":
-                        break
-                    if mtype == "reply":
-                        text = (msg.get("text") or "").strip()
-                        if not text:
-                            continue
-                        if not turn_task.done():
-                            await turn_task
-                        await client.query(text)
-                        turn_task = asyncio.create_task(drain_turn())
-                    elif mtype == "finalize":
-                        if not turn_task.done():
-                            await turn_task
-                        # Samples: lock the draft for the user's own session
-                        # (output.md is in run_dir already) but don't
-                        # promote to the canonical chapters/ path —
-                        # one visitor's iteration shouldn't overwrite
-                        # the corpus's canonical baseline for everyone
-                        # else.
-                        if is_sample_corpus(session_slug):
-                            output_md = run_dir / "output.md"
-                            content = (
-                                output_md.read_text(encoding="utf-8")
-                                if output_md.exists() else ""
-                            )
-                            await send({
-                                "type": "finalized",
-                                "content": content,
-                                "location": str(output_md.relative_to(REPO)),
-                                "words": len(content.split()),
-                                "overwritten": False,
-                            })
-                            continue
-                        try:
-                            promoted = _promote_era_chapter(run_dir, era, corpus_id)
-                        except ValueError as exc:
-                            await send({"type": "error", "message": str(exc)})
-                            continue
-                        await send({
-                            "type": "finalized",
-                            "content": promoted["content"],
-                            "location": promoted["location"],
-                            "words": promoted["words"],
-                            "overwritten": promoted["overwritten"],
-                        })
-                else:
-                    client_recv.cancel()
-                    try:
-                        await client_recv
-                    except (asyncio.CancelledError, WebSocketDisconnect):
-                        pass
-
-            await send({
-                "type": "done",
-                "cost_usd": cumulative_cost,
-                "run_dir": str(run_dir.relative_to(REPO)),
-            })
-
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
+            mtype = msg.get("type")
+            if mtype == "ping":
+                await send({"type": "pong"})
+                continue
+            if mtype == "stop":
+                await sess.stop()
+                break
+            if mtype == "reply":
+                text = (msg.get("text") or "").strip()
+                if text:
+                    await sess.query(text)
+            elif mtype == "finalize":
+                # Wait for any in-flight write so we don't promote a
+                # half-streamed output.md.
+                await sess.wait_idle()
+                if is_sample_corpus(session_slug):
+                    # Samples: lock the draft for this visitor's session
+                    # but don't promote — one visitor's finalize shouldn't
+                    # overwrite the corpus's canonical baseline for
+                    # everyone else.
+                    output_md = sess.run_dir / "output.md"
+                    content = (
+                        output_md.read_text(encoding="utf-8")
+                        if output_md.exists() else ""
+                    )
+                    await sess.emit({
+                        "type": "finalized",
+                        "content": content,
+                        "location": str(output_md.relative_to(REPO)),
+                        "words": len(content.split()),
+                        "overwritten": False,
+                    })
+                    continue
+                try:
+                    promoted = _promote_era_chapter(sess.run_dir, era, corpus_id)
+                except ValueError as exc:
+                    await send({"type": "error", "message": str(exc)})
+                    continue
+                await sess.emit({
+                    "type": "finalized",
+                    "content": promoted["content"],
+                    "location": promoted["location"],
+                    "words": promoted["words"],
+                    "overwritten": promoted["overwritten"],
+                })
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -618,8 +537,8 @@ async def session(ws: WebSocket):
         traceback.print_exc()
         await send({"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
-        for tk in tasks:
-            tk.cancel()
+        if sess is not None:
+            sess.detach(ws)
         try:
             await ws.close()
         except Exception:

@@ -11,6 +11,10 @@ inline, then transition to curate mode. Streaming is visible from the
 first token. On `finalize`, the server sends `/lock` to the agent,
 which writes themes.md; the file watcher emits `finalized` when that
 write lands.
+
+Tier 3 disconnect-resilience: the SDK lifecycle lives on a `Session`
+(see core/session.py) registered by run_id, not on the WS. The WS is
+just a transport — it attaches/detaches and the session keeps running.
 """
 from __future__ import annotations
 
@@ -21,16 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from api.auth import _gc_auth, _load_auth
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ResultMessage,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
-from claude_agent_sdk.types import StreamEvent
+from claude_agent_sdk import ClaudeAgentOptions
 from api.config import (
     CURATE_PATH,
     REPO,
@@ -47,6 +42,7 @@ from api.corpora import (
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
 from core import corpus as wb
+from core.session import Session, create_session, get_session
 
 router = APIRouter()
 
@@ -102,6 +98,38 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
         + corpus_sample
         + "\n\n--- INPUT-END ---\n"
     )
+
+
+async def _themes_watch(session: Session) -> None:
+    """Background loop: watch themes.md for changes, emit draft_update.
+    When finalize_pending is set and themes.md changes, emit finalized
+    and clear the flag."""
+    p = session.run_dir / "themes.md"
+    themes_relative = str(p.relative_to(REPO))
+    last_m: float | None = None
+    while True:
+        await asyncio.sleep(0.5)
+        try:
+            m = p.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if last_m == m:
+            continue
+        last_m = m
+        try:
+            content = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        await session.emit({"type": "draft_update", "kind": "themes", "content": content})
+        if session.finalize_pending:
+            session.finalize_pending = False
+            await session.emit({
+                "type": "finalized",
+                "content": content,
+                "location": themes_relative,
+                "words": len(content.split()),
+                "overwritten": False,
+            })
 
 
 @router.get("/themes/latest")
@@ -171,10 +199,6 @@ def list_themes_top_n_notes(n: int = 5, session: str = Depends(require_corpus_ac
 @router.websocket("/themes-curate")
 async def themes_curate(ws: WebSocket):
     await ws.accept()
-    tasks: list[asyncio.Task] = []
-    run_dir: Path | None = None
-    cumulative_cost = 0.0
-    finalize_pending = False
 
     async def send(obj: dict):
         try:
@@ -225,250 +249,140 @@ async def themes_curate(ws: WebSocket):
             return
     corpus_id = _session_corpus_id(session_slug)
 
+    session: Session | None = None
     try:
-        top_n = int(first.get("top_n") or 5)
-        model_key = first.get("model")
-        model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
-
-        # Resume path: client passes a previously-emitted run_dir. We
-        # skip _prepare_themes_run (which would create a new dir + write
-        # input.md) and use whatever's already on disk + the captured
-        # state.md as the kickoff context.
+        # Attempt Tier 3 hot resume: client passed run_id of a session
+        # that's still alive in the registry.
         resume_run_rel = first.get("run_id") if first.get("resume") else None
         if resume_run_rel:
-            from core.resume import build_themes_resume_kickoff
-            run_dir = REPO / resume_run_rel
-            if not run_dir.is_dir():
-                await reject(f"resume run_dir not found: {resume_run_rel}")
-                return
-            run_rel = resume_run_rel
-            full_user_msg = (run_dir / "input.md").read_text(encoding="utf-8") if (run_dir / "input.md").exists() else ""
-            in_chars = len(full_user_msg)
-            kickoff = build_themes_resume_kickoff(run_dir, corpus_id)
-        else:
-            prep = _prepare_themes_run(top_n=top_n, corpus_id=corpus_id)
-            run_dir = prep["run_dir"]
-            run_rel = prep["run_rel"]
-            full_user_msg = prep["full_user_msg"]
-            in_chars = prep["in_chars"]
-            kickoff = _build_themes_kickoff(run_dir, full_user_msg, corpus_id)
-        run_dir_abs = run_dir
+            existing = get_session(resume_run_rel)
+            if existing is not None and existing.kind == "themes" and existing.corpus_id == corpus_id:
+                session = existing
+                await session.attach(ws)
 
-        await send({
-            "type": "spawned",
-            "model": model,
-            "run_dir": run_rel,
-            "top_n": top_n,
-            "input_chars": in_chars,
-            "resumed": bool(resume_run_rel),
-        })
+        if session is None:
+            top_n = int(first.get("top_n") or 5)
+            model_key = first.get("model")
+            model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
-        sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+            # Tier 2.5 cold resume: run_dir exists on disk but no live
+            # session — rebuild kickoff from input.md / state.md.
+            if resume_run_rel:
+                from core.resume import build_themes_resume_kickoff
+                run_dir = REPO / resume_run_rel
+                if not run_dir.is_dir():
+                    await reject(f"resume run_dir not found: {resume_run_rel}")
+                    return
+                run_rel = resume_run_rel
+                full_user_msg = (run_dir / "input.md").read_text(encoding="utf-8") if (run_dir / "input.md").exists() else ""
+                in_chars = len(full_user_msg)
+                kickoff = build_themes_resume_kickoff(run_dir, corpus_id)
+            else:
+                prep = _prepare_themes_run(top_n=top_n, corpus_id=corpus_id)
+                run_dir = prep["run_dir"]
+                run_rel = prep["run_rel"]
+                full_user_msg = prep["full_user_msg"]
+                in_chars = prep["in_chars"]
+                kickoff = _build_themes_kickoff(run_dir, full_user_msg, corpus_id)
+            run_dir_abs = run_dir
 
-        # Single-phase: round-1 generation + curate happen inside one SDK
-        # session. System prompt combines both; kickoff inlines the corpus
-        # sample and instructs the agent to generate round-1, then enter
-        # curate orientation. Streaming is visible from the first token.
-        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8")
-        curate_prompt = CURATE_PATH.read_text(encoding="utf-8")
-        combined_system = (
-            themes_r1_prompt.rstrip("\n")
-            + "\n\n---\n\n"
-            + curate_prompt
-        )
+            sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
-        runs_parent_abs = run_dir_abs.parent
-        settings = {
-            "permissions": {
-                "deny": [
-                    f"Read({runs_parent_abs}/**)",
-                    f"Edit({runs_parent_abs}/**)",
-                    f"Write({runs_parent_abs}/**)",
-                ],
-                "allow": [
-                    f"Read({run_dir_abs}/**)",
-                    f"Edit({run_dir_abs}/**)",
-                    f"Write({run_dir_abs}/**)",
-                ],
+            # Single-phase: round-1 generation + curate happen inside one SDK
+            # session. System prompt combines both.
+            themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8")
+            curate_prompt = CURATE_PATH.read_text(encoding="utf-8")
+            combined_system = (
+                themes_r1_prompt.rstrip("\n")
+                + "\n\n---\n\n"
+                + curate_prompt
+            )
+
+            runs_parent_abs = run_dir_abs.parent
+            settings = {
+                "permissions": {
+                    "deny": [
+                        f"Read({runs_parent_abs}/**)",
+                        f"Edit({runs_parent_abs}/**)",
+                        f"Write({runs_parent_abs}/**)",
+                    ],
+                    "allow": [
+                        f"Read({run_dir_abs}/**)",
+                        f"Edit({run_dir_abs}/**)",
+                        f"Write({run_dir_abs}/**)",
+                    ],
+                }
             }
-        }
-        settings_path = run_dir / ".claude-settings.json"
-        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+            settings_path = run_dir / ".claude-settings.json"
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
 
-        themes_relative = str((run_dir / "themes.md").relative_to(REPO))
+            options = ClaudeAgentOptions(
+                model=model,
+                system_prompt=combined_system,
+                permission_mode="acceptEdits",
+                allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
+                settings=str(settings_path),
+                cwd=str(run_dir_abs),
+                include_partial_messages=True,
+                env=sub_env,
+            )
 
-        async def watch_files():
-            nonlocal finalize_pending
-            paths = {"themes": run_dir / "themes.md"}
-            mtimes: dict[str, float] = {}
-            while True:
-                await asyncio.sleep(0.5)
-                for kind, p in paths.items():
-                    try:
-                        m = p.stat().st_mtime
-                    except FileNotFoundError:
-                        continue
-                    if mtimes.get(kind) != m:
-                        mtimes[kind] = m
-                        try:
-                            content = p.read_text(encoding="utf-8")
-                        except Exception:
-                            continue
-                        await send({"type": "draft_update", "kind": kind, "content": content})
-                        if finalize_pending and kind == "themes":
-                            finalize_pending = False
-                            await send({
-                                "type": "finalized",
-                                "content": content,
-                                "location": themes_relative,
-                                "words": len(content.split()),
-                                "overwritten": False,
-                            })
+            spawned_event = {
+                "type": "spawned",
+                "model": model,
+                "run_dir": run_rel,
+                "top_n": top_n,
+                "input_chars": in_chars,
+                "resumed": bool(resume_run_rel),
+            }
 
-        watch_task = asyncio.create_task(watch_files())
-        tasks = [watch_task]
+            # Persist the agent's last response to state.md after each turn
+            # so a cold-path Tier 2.5 resume (server restart, GC) can rebuild
+            # context. CURATE prompt opens every response with `## Current
+            # state`, so this file always reflects the latest curation state.
+            state_path = run_dir_abs / "state.md"
 
-        loop = asyncio.get_running_loop()
+            async def on_turn_complete(text: str) -> None:
+                try:
+                    state_path.write_text(text, encoding="utf-8")
+                except Exception:
+                    pass
 
-        async def stderr_cb(line: str):
-            line = (line or "").strip()
-            if not line:
-                return
-            await send({"type": "log", "text": line})
+            session = await create_session(
+                run_id=run_rel,
+                run_dir=run_dir_abs,
+                corpus_id=corpus_id,
+                kind="themes",
+                options=options,
+                kickoff=kickoff,
+                spawned_event=spawned_event,
+                on_turn_complete=on_turn_complete,
+                background_loop=_themes_watch,
+            )
+            await session.attach(ws)
 
-        def stderr_sync(line: str):
-            asyncio.run_coroutine_threadsafe(stderr_cb(line), loop)
-
-        options = ClaudeAgentOptions(
-            model=model,
-            system_prompt=combined_system,
-            permission_mode="acceptEdits",
-            allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
-            settings=str(settings_path),
-            cwd=str(run_dir_abs),
-            include_partial_messages=True,
-            stderr=stderr_sync,
-            env=sub_env,
-        )
-
-        async with ClaudeSDKClient(options=options) as client:
-            async def drain_turn():
-                nonlocal cumulative_cost
-                await send({"type": "status", "status": "generating"})
-                # Capture this turn's narration for the resume snapshot
-                # (state.md). Themes doesn't have a Write-tool-driven
-                # output.md the way era does, so we save the agent's
-                # last response on every turn for tier-2.5 resume.
-                turn_narration: list[str] = []
-                async for msg in client.receive_response():
-                    if isinstance(msg, StreamEvent):
-                        event = msg.event if hasattr(msg, "event") else {}
-                        etype = event.get("type")
-                        if etype == "content_block_delta":
-                            delta = event.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text = delta.get("text", "")
-                                if text:
-                                    turn_narration.append(text)
-                                    await send({"type": "narration", "text": text})
-                    elif isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, ToolUseBlock):
-                                await send({
-                                    "type": "tool_use",
-                                    "id": block.id,
-                                    "name": block.name,
-                                    "input": block.input or {},
-                                })
-                    elif isinstance(msg, UserMessage):
-                        for block in msg.content if isinstance(msg.content, list) else []:
-                            if isinstance(block, ToolResultBlock):
-                                tr = block.content
-                                if isinstance(tr, list):
-                                    tr = "".join(
-                                        getattr(x, "text", "") or str(x) for x in tr
-                                    )
-                                tr = str(tr or "")
-                                if len(tr) > 600:
-                                    tr = tr[:600] + "…"
-                                await send({
-                                    "type": "tool_result",
-                                    "id": block.tool_use_id,
-                                    "is_error": bool(block.is_error),
-                                    "text": tr,
-                                })
-                    elif isinstance(msg, ResultMessage):
-                        cumulative_cost = msg.total_cost_usd or cumulative_cost
-                        usage = getattr(msg, "usage", None) or {}
-                        await send({
-                            "type": "turn_end",
-                            "cost_usd": cumulative_cost,
-                            "stop_reason": getattr(msg, "stop_reason", "") or "",
-                            "usage": usage,
-                        })
-                # Persist this turn's full narration as the resume
-                # snapshot. The CURATE prompt tells the agent to start
-                # every response with the `## Current state` block, so
-                # this file always reflects the latest curation state.
-                full_text = "".join(turn_narration).strip()
-                if full_text:
-                    try:
-                        (run_dir_abs / "state.md").write_text(full_text, encoding="utf-8")
-                    except Exception:
-                        pass  # snapshotting is best-effort; never fails the turn
-                await send({"type": "status", "status": "awaiting_reply"})
-
-            await client.query(kickoff)
-            turn_task = asyncio.create_task(drain_turn())
-
-            while True:
-                client_recv = asyncio.create_task(ws.receive_json())
-                done, _ = await asyncio.wait(
-                    [client_recv, turn_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                if client_recv in done:
-                    try:
-                        msg = client_recv.result()
-                    except WebSocketDisconnect:
-                        break
-                    mtype = msg.get("type")
-                    if mtype == "ping":
-                        # Keep-alive: client pings periodically so idle
-                        # tunnels (Cloudflare, browser App Nap, etc.)
-                        # don't reap the WS while the agent is silent.
-                        await send({"type": "pong"})
-                        continue
-                    if mtype == "stop":
-                        break
-                    if mtype == "reply":
-                        text = (msg.get("text") or "").strip()
-                        if not text:
-                            continue
-                        if not turn_task.done():
-                            await turn_task
-                        await client.query(text)
-                        turn_task = asyncio.create_task(drain_turn())
-                    elif mtype == "finalize":
-                        if not turn_task.done():
-                            await turn_task
-                        finalize_pending = True
-                        await client.query("/lock")
-                        turn_task = asyncio.create_task(drain_turn())
-                else:
-                    client_recv.cancel()
-                    try:
-                        await client_recv
-                    except (asyncio.CancelledError, WebSocketDisconnect):
-                        pass
-
-            await send({
-                "type": "done",
-                "cost_usd": cumulative_cost,
-                "run_dir": str(run_dir.relative_to(REPO)),
-            })
-
+        # Receive loop. Session owns the SDK; this loop just relays
+        # client messages to it. Detach (not stop) on disconnect so the
+        # session keeps running for a reattach.
+        while True:
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
+            mtype = msg.get("type")
+            if mtype == "ping":
+                await send({"type": "pong"})
+                continue
+            if mtype == "stop":
+                await session.stop()
+                break
+            if mtype == "reply":
+                text = (msg.get("text") or "").strip()
+                if text:
+                    await session.query(text)
+            elif mtype == "finalize":
+                session.finalize_pending = True
+                await session.query("/lock")
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -476,8 +390,8 @@ async def themes_curate(ws: WebSocket):
         traceback.print_exc()
         await send({"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
-        for tk in tasks:
-            tk.cancel()
+        if session is not None:
+            session.detach(ws)
         try:
             await ws.close()
         except Exception:
