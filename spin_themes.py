@@ -83,14 +83,15 @@ def folder_aware_sample(notes_in_era, top_n, corpus_id=None):
     return sampled
 
 
-def build_input(top_n):
-    notes = wb.load_corpus_notes()
-    wb.apply_date_overrides(notes)
-    wb.apply_note_metadata(notes)
+def build_input(top_n, corpus_id=None):
+    notes = wb.load_corpus_notes(corpus_id)
+    wb.apply_date_overrides(notes, corpus_id)
+    wb.apply_note_metadata(notes, corpus_id)
+    eras = wb.load_eras(corpus_id)
 
     by_era = {}
     for n in notes:
-        era = wb.era_of(n.get("date", ""))
+        era = wb.era_of(n.get("date", ""), eras)
         if era:
             by_era.setdefault(era, []).append(n)
 
@@ -102,7 +103,7 @@ def build_input(top_n):
     lines.append("")
     lines.append("## Eras")
     lines.append("")
-    for name, lo, hi in wb.ERAS:
+    for name, lo, hi in eras:
         era_notes = by_era.get(name, [])
         if not era_notes:
             continue
@@ -119,11 +120,11 @@ def build_input(top_n):
         f"and creative notes outside this sample are not shown."
     )
     lines.append("")
-    for name, _, _ in wb.ERAS:
+    for name, _, _ in eras:
         era_notes = by_era.get(name, [])
         if not era_notes:
             continue
-        sampled = folder_aware_sample(era_notes, top_n)
+        sampled = folder_aware_sample(era_notes, top_n, corpus_id)
         lines.append(f"### {name} — {len(sampled)} sampled notes")
         lines.append("")
         for n in sampled:
