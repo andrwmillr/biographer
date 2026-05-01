@@ -40,11 +40,9 @@ Return explicit yes (with scope) or no (with what's missing). Don't soft-confirm
 
 ## LOCKING
 
-When you receive `/lock` (sent by the Finalize button) or the user clearly signals to lock in their own words, write the final themes to `themes.md` in the current directory using the Write tool. Format:
+When you receive `/lock` (sent by the Finalize button) or the user clearly signals to lock in their own words, write the final themes to `themes.md` in the current directory using the Write tool. Start the file directly with the first theme — no top-level header. Format:
 
 ~~~
-## LOCKED THEMES
-
 ### [theme name]
 
 [gloss]
