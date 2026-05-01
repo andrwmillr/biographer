@@ -3,8 +3,8 @@
 wikilinks of the form [[rel|YYYY-MM-DD]]. In-place by default.
 
 Usage:
-    python3 _scripts/resolve_citations.py                  # rewrite biography.md
-    python3 _scripts/resolve_citations.py biography_20260424_171813.md   # rewrite a specific snapshot
+    python3 _web/scripts/resolve_citations.py                  # rewrite biography.md
+    python3 _web/scripts/resolve_citations.py biography_20260424_171813.md   # rewrite a specific snapshot
 """
 import sys
 from pathlib import Path

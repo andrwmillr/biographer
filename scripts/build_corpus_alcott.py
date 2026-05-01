@@ -29,7 +29,7 @@ Heuristics for parsing Cheney's text:
   follow-up lines.
 
 Run:
-    python3 _scripts/build_corpus_alcott.py [--slug c_xxxx]
+    python3 _web/scripts/build_corpus_alcott.py [--slug c_xxxx]
 """
 from __future__ import annotations
 

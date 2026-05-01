@@ -6,8 +6,8 @@ prints output. Fast loop for tuning the summary prompt or harvesting
 variants — ~30 seconds per call, no chapter regeneration.
 
 Usage:
-    python3 _scripts/summarize.py                                          # default: 17:18 run
-    python3 _scripts/summarize.py _history/biography_20260424_171813.md   # explicit
+    python3 _web/scripts/summarize.py                                          # default: 17:18 run
+    python3 _web/scripts/summarize.py _history/biography_20260424_171813.md   # explicit
 """
 import asyncio
 import os

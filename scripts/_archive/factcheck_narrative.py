@@ -11,8 +11,8 @@ still get checked, which is where the worst confabulations tend to live.
 Output: `<narrative>.factcheck.json` with only the flagged paragraphs.
 
 Usage:
-    python3 _scripts/factcheck_narrative.py                    # biography.md
-    python3 _scripts/factcheck_narrative.py biography_20260424_171813.md
+    python3 _web/scripts/factcheck_narrative.py                    # biography.md
+    python3 _web/scripts/factcheck_narrative.py biography_20260424_171813.md
 """
 import asyncio
 import json

@@ -8,8 +8,8 @@ for literal matches. If any term hits, mark the claim as
 Annotates in-place. Run after `factcheck_narrative.py`.
 
 Usage:
-    python3 _scripts/filter_factcheck.py                   # biography.factcheck.json
-    python3 _scripts/filter_factcheck.py biography.factcheck.json
+    python3 _web/scripts/filter_factcheck.py                   # biography.factcheck.json
+    python3 _web/scripts/filter_factcheck.py biography.factcheck.json
 """
 import json
 import re
