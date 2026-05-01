@@ -311,14 +311,15 @@ def auth_logout(x_auth_token: str | None = Header(None)):
 # ---- Multi-tenant corpus session layer ------------------------------------
 # Each browser holds an opaque session value in localStorage and sends it as
 # X-Corpus-Session on every request. The session value IS the corpus slug
-# under _corpora/<slug>/. The legacy single-tenant corpus at _corpus/ is
-# accessed by the special session value LEGACY_SESSION (Andrew's admin
-# session). Value is loaded from env (set in _scripts/.env, never committed).
-# Set it once in DevTools:
-#   localStorage.setItem('corpusSession', '<value of LEGACY_SESSION>')
+# under _corpora/<slug>/. Authenticated users own a list of slugs; sample
+# slugs are readable by anyone. Admin endpoints gate on ADMIN_EMAILS.
 
 CORPORA_ROOT = REPO / "_corpora"
-LEGACY_SESSION = os.environ["LEGACY_SESSION"]
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
 
 # Upload limits for /import/notes.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
@@ -331,20 +332,37 @@ def get_session(x_corpus_session: str | None = Header(None)) -> str:
     return x_corpus_session
 
 
-def require_legacy(session: str = Depends(get_session)) -> None:
-    if session != LEGACY_SESSION:
-        raise HTTPException(403, "this endpoint is reserved for the legacy admin session")
+def require_admin(email: str | None = Depends(get_auth_optional)) -> str:
+    if email is None or email not in ADMIN_EMAILS:
+        raise HTTPException(403, "admin endpoint")
+    return email
+
+
+def is_sample_corpus(slug: str) -> bool:
+    """A corpus is a sample if its `_meta.json` has `"sample": true`. Sample
+    corpora are readable without auth (so visitors can explore famous PD
+    diaries before importing their own notes) but stay write-locked through
+    require_writable."""
+    if not re.fullmatch(r"c_[0-9a-f]{16}", slug):
+        return False
+    meta_path = CORPORA_ROOT / slug / "_meta.json"
+    if not meta_path.exists():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(meta.get("sample"))
 
 
 def require_corpus_access(
     session: str = Depends(get_session),
     auth_email: str | None = Depends(get_auth_optional),
 ) -> str:
-    """Gate on (auth token, corpus ownership). The legacy admin session
-    bypasses the email check — it's authenticated by knowledge of the
-    server-side LEGACY_SESSION secret. Every other corpus session requires
-    an X-Auth-Token whose user owns the slug."""
-    if session == LEGACY_SESSION:
+    """Gate on (auth token, corpus ownership). Sample corpora are readable
+    without auth. Every other corpus session requires an X-Auth-Token whose
+    user owns the slug."""
+    if is_sample_corpus(session):
         return session
     if auth_email is None:
         raise HTTPException(401, "auth required: missing or invalid X-Auth-Token")
@@ -354,14 +372,20 @@ def require_corpus_access(
     return session
 
 
+def require_writable(session: str = Depends(require_corpus_access)) -> str:
+    """Gate destructive / compute-spending operations. Sample corpora are
+    read-only — no drafting (which spawns a Claude subprocess on the host's
+    dime), no chapter promotion, no eras replacement, no wipe."""
+    if is_sample_corpus(session):
+        raise HTTPException(403, "sample corpora are read-only")
+    return session
+
+
 def corpus_dir(session: str) -> Path:
     """Resolve a session string to its on-disk corpus directory.
     Raises 401 for invalid / nonexistent sessions."""
-    if session == LEGACY_SESSION:
-        return REPO / "_corpora" / "andrew"
-    # Reject session values that could be the host's directory name or that
-    # don't match the issued slug shape. Imported corpora use slugs like
-    # "c_<16 hex>"; "andrew" is the legacy admin slug now ownable by email.
+    # Reject session values that don't match an issued slug. Imported corpora
+    # use "c_<16 hex>"; "andrew" is the admin's pre-existing slug.
     if session != "andrew" and not re.fullmatch(r"c_[0-9a-f]{16}", session):
         raise HTTPException(401, "invalid session")
     candidate = CORPORA_ROOT / session
@@ -379,9 +403,8 @@ def make_slug() -> str:
 
 
 def _session_corpus_id(session: str) -> str:
-    """Map a session header value to the wb corpus_id. Legacy admin session
-    points at andrew's corpus; everything else is the slug as-is."""
-    return "andrew" if session == LEGACY_SESSION else session
+    """Map a session header value to the wb corpus_id. The slug IS the id."""
+    return session
 
 
 def _load_state(corpus_id: str = "andrew"):
@@ -464,14 +487,41 @@ def list_notes(era: str, session: str = Depends(require_corpus_access)):
     return out
 
 
+@app.get("/notes/themes-top-n", dependencies=[Depends(require_admin)])
+def list_themes_top_n_notes(n: int = 7, session: str = Depends(get_session)):
+    """Folder-aware top-N sample fed to /themes-curate, flattened across eras
+    and sorted chronologically. Same item shape as /notes?era=… so the UI can
+    use one renderer. Default n=7 — 10 exceeds context."""
+    import spin_themes
+    corpus_id = _session_corpus_id(session)
+    corpus_dir(session)
+    _, by_era, eras = _load_state(corpus_id)
+    sampled = []
+    for era_name, _, _ in eras:
+        era_notes = by_era.get(era_name, [])
+        if era_notes:
+            sampled.extend(spin_themes.folder_aware_sample(era_notes, n))
+    sampled.sort(key=lambda x: x.get("date", ""))
+    out = []
+    for note in sampled:
+        rel = note["rel"]
+        item = {
+            "rel": rel,
+            "date": note.get("date", ""),
+            "title": note.get("title", ""),
+            "label": rel.split("/", 1)[0] if "/" in rel else "",
+            "source": _note_source(rel, corpus_id),
+            "body": note.get("body") or wb.parse_note_body(rel, corpus_id),
+        }
+        if note.get("editor_note"):
+            item["editor_note"] = note["editor_note"]
+        out.append(item)
+    return out
+
+
 class DraftRequest(BaseModel):
     era: str
     future: bool = False
-
-
-class PromoteRequest(BaseModel):
-    era: str
-    run_dir: str  # repo-relative run dir, e.g. _corpus/.../runs/2026-04-27T...
 
 
 def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool = False) -> dict:
@@ -548,7 +598,7 @@ def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool 
     }
 
 
-def _prepare_themes_run(top_n: int = 10) -> dict:
+def _prepare_themes_run(top_n: int = 7) -> dict:
     """Build the round-1 corpus-themes input message and create a fresh
     themes run dir on disk. Mirrors spin_themes.py's build_input(top_n)
     and OUT_DIR layout.
@@ -570,48 +620,46 @@ def _prepare_themes_run(top_n: int = 10) -> dict:
     }
 
 
-@app.post("/promote")
-def promote(req: PromoteRequest, session: str = Depends(require_corpus_access)):
-    corpus_id = _session_corpus_id(session)
-    corpus_dir(session)
-    run_dir = (REPO / req.run_dir).resolve()
-    # Reject paths that escape this corpus's biographies dump tree.
+def _promote_era_chapter(run_dir: Path, era_name: str, corpus_id: str) -> dict:
+    """Copy run_dir/output.md → chapters/<era_slug>.md. Used by the /session
+    WS finalize handler. Raises ValueError on path/era mismatch (caller maps
+    to a WS error message). Run dir is verified to live under this corpus's
+    biographies/_dump/ tree, and the era slug derived from the run_dir path
+    must match the requested era — preventing accidental cross-era overwrites
+    if the WS state ever drifts."""
     bio_root = (wb.biographies_dir(corpus_id) / "_dump").resolve()
+    rd = run_dir.resolve()
     try:
-        rel = run_dir.relative_to(bio_root)
+        rel = rd.relative_to(bio_root)
     except ValueError:
-        raise HTTPException(400, "run_dir must be under biographies/_dump/")
-    # Derive destination slug from the run_dir path itself: <era_slug>/runs/<ts>.
-    # Trusting req.era was a footgun — the user could change the dropdown after
-    # a session ended and overwrite the wrong chapter.
+        raise ValueError("run_dir must be under biographies/_dump/")
     parts = rel.parts
     if len(parts) < 3 or parts[1] != "runs":
-        raise HTTPException(400, f"unexpected run_dir layout: {req.run_dir}")
+        raise ValueError(f"unexpected run_dir layout: {rd}")
     slug = parts[0]
-    expected_slug = wb.era_slug(req.era)
+    expected_slug = wb.era_slug(era_name)
     if slug != expected_slug:
-        raise HTTPException(
-            400,
-            f"run_dir era ({slug}) does not match selected era ({expected_slug}). "
-            f"Refusing to promote to avoid overwriting the wrong chapter.",
+        raise ValueError(
+            f"run_dir era ({slug}) does not match selected era ({expected_slug})"
         )
-    src = run_dir / "output.md"
+    src = rd / "output.md"
     if not src.is_file():
-        raise HTTPException(404, f"no output.md in {req.run_dir}")
+        raise ValueError(f"no output.md in {rd}")
     dst = wb.chapters_dir(corpus_id) / f"{slug}.md"
     dst.parent.mkdir(parents=True, exist_ok=True)
     overwritten = dst.exists()
-    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    content = src.read_text(encoding="utf-8")
+    dst.write_text(content, encoding="utf-8")
     return {
-        "src": str(src.relative_to(REPO)),
-        "dst": str(dst.relative_to(REPO)),
+        "content": content,
+        "location": str(dst.relative_to(REPO)),
+        "words": len(content.split()),
         "overwritten": overwritten,
-        "words": len(src.read_text(encoding="utf-8").split()),
     }
 
 
 @app.post("/draft")
-async def draft(req: DraftRequest, session: str = Depends(require_corpus_access)):
+async def draft(req: DraftRequest, session: str = Depends(require_writable)):
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     inputs = _prepare_run(req.era, corpus_id=corpus_id, include_future=req.future)
@@ -734,49 +782,105 @@ CURATE_KICKOFF_PATH = REPO / "_scripts" / "CURATE_KICKOFF.md"
 THEMES_BASE = wb.CORPUS / "claude" / "themes"
 
 
-class ThemesSpinRequest(BaseModel):
-    top_n: int = 10
-    model: str | None = None
+def _build_curate_kickoff(run_dir_abs: Path) -> str:
+    """Read CURATE_KICKOFF.md, substitute placeholders, append the INPUT block
+    of round-1 themes + corpus sample inlined from the run dir. Mirrors
+    _build_kickoff for the chapter flow."""
+    kickoff = CURATE_KICKOFF_PATH.read_text(encoding="utf-8")
+    kickoff = kickoff.replace("__RUN_DIR__", str(run_dir_abs))
+    kickoff = kickoff.replace("__SUBJECT__", wb.SUBJECT_NAME)
 
+    round1_themes = (run_dir_abs / "output.md").read_text(encoding="utf-8")
+    corpus_sample = (run_dir_abs / "input.md").read_text(encoding="utf-8")
 
-@app.post("/themes-spin", dependencies=[Depends(require_legacy)])
-async def themes_spin(req: ThemesSpinRequest):
-    """Run round-1 corpus-themes generation. Streams stream_event deltas as
-    SSE and persists the final output.md to the new run dir. Mirrors /draft."""
-    inputs = _prepare_themes_run(req.top_n)
-    full_user_msg = inputs["full_user_msg"]
-    in_chars = inputs["in_chars"]
-    run_dir = inputs["run_dir"]
-    run_rel = inputs["run_rel"]
-
-    themes_prompt = THEMES_R1_PATH.read_text(encoding="utf-8").replace(
-        "__SUBJECT__", wb.SUBJECT_NAME
+    return (
+        kickoff.rstrip("\n")
+        + "\n\n--- INPUT-START ---\n\n"
+        + "# Round-1 themes (the starting list)\n\n"
+        + round1_themes
+        + "\n\n# Corpus sample (your full context)\n\n"
+        + corpus_sample
+        + "\n\n--- INPUT-END ---\n"
     )
-    model_key = req.model
-    model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
-    async def gen():
-        def sse(obj):
-            return f"data: {json.dumps(obj)}\n\n"
 
-        yield sse({
-            "type": "start",
-            "top_n": req.top_n,
-            "input_chars": in_chars,
+@app.websocket("/themes-curate")
+async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | None = None):
+    """Two-phase themes flow.
+
+    Phase 1: server prepares a fresh run dir with the folder-aware top-N corpus
+    sample, then runs `claude -p` with THEMES_R1.md as the system prompt to
+    produce the round-1 themes list. Text deltas stream as `narration`; the
+    final draft is written to `output.md` and emitted as a `draft_update`.
+
+    Phase 2: ClaudeSDKClient curate chat against the same run dir using
+    CURATE.md. The agent can drop, merge, tighten, and propose themes via
+    Read/Edit/Write within the run dir. On `finalize`, the server sends `/lock`
+    to the agent, which writes `themes.md` via Write. The file watcher streams
+    intermediate writes as `draft_update kind=themes` and emits `finalized`
+    once the lock-triggered write lands."""
+    await ws.accept()
+    tasks: list[asyncio.Task] = []
+    run_dir: Path | None = None
+    cumulative_cost = 0.0
+    finalize_pending = False
+
+    async def send(obj: dict):
+        try:
+            await ws.send_text(json.dumps(obj))
+        except Exception:
+            pass
+
+    state = _gc_auth(_load_auth())
+    record = state["sessions"].get(auth) if auth else None
+    email = record["email"] if record else None
+    if email is None or email not in ADMIN_EMAILS:
+        await send({"type": "error", "message": "themes curation is admin-only"})
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        return
+
+    try:
+        first = await ws.receive_json()
+        if first.get("type") != "start":
+            await send({"type": "error", "message": "first message must be {type:'start'}"})
+            return
+
+        top_n = int(first.get("top_n") or 7)
+        model_key = first.get("model")
+        model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
+
+        prep = _prepare_themes_run(top_n=top_n)
+        run_dir = prep["run_dir"]
+        run_rel = prep["run_rel"]
+        full_user_msg = prep["full_user_msg"]
+        in_chars = prep["in_chars"]
+        run_dir_abs = run_dir
+
+        await send({
+            "type": "spawned",
             "model": model,
             "run_dir": run_rel,
+            "top_n": top_n,
+            "input_chars": in_chars,
         })
+
+        sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+
+        # ---- Phase 1: round-1 themes via `claude -p` ----
+        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8")
+        await send({"type": "status", "status": "generating"})
 
         chunks: list[str] = []
         result_evt: dict | None = None
         proc: asyncio.subprocess.Process | None = None
         try:
-            sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
             proc = await asyncio.create_subprocess_exec(
-                "claude",
-                "-p",
+                "claude", "-p",
                 "--model", model,
-                "--system-prompt", themes_prompt,
+                "--system-prompt", themes_r1_prompt,
                 "--output-format", "stream-json",
                 "--include-partial-messages",
                 "--verbose",
@@ -806,125 +910,51 @@ async def themes_spin(req: ThemesSpinRequest):
                 t = evt.get("type")
                 if t == "stream_event":
                     inner = evt.get("event", {})
-                    itype = inner.get("type")
-                    if itype == "content_block_delta":
+                    if inner.get("type") == "content_block_delta":
                         delta = inner.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text = delta.get("text", "")
                             if text:
                                 chunks.append(text)
-                                yield sse({"type": "delta", "text": text})
-                    elif itype == "message_start":
-                        yield sse({"type": "status", "status": "generating"})
-                elif t == "system":
-                    sub = evt.get("subtype")
-                    if sub == "init":
-                        yield sse({"type": "status", "status": "spawned"})
+                                await send({"type": "narration", "text": text})
                 elif t == "result":
                     result_evt = evt
 
             await stdin_task
             rc = await proc.wait()
-
-            (run_dir / "output.md").write_text("".join(chunks), encoding="utf-8")
-
-            if rc != 0 and not result_evt:
-                stderr = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
-                yield sse({"type": "error", "message": f"claude exited {rc}: {stderr[-500:]}", "run_dir": run_rel})
-                return
-
-            usage = (result_evt or {}).get("usage", {}) if result_evt else {}
-            yield sse({
-                "type": "done",
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-                "cache_read": usage.get("cache_read_input_tokens", 0) or 0,
-                "cache_write": usage.get("cache_creation_input_tokens", 0) or 0,
-                "stop_reason": (result_evt or {}).get("stop_reason", ""),
-                "cost_usd": (result_evt or {}).get("total_cost_usd", 0),
-                "run_dir": run_rel,
-            })
         except Exception as e:
-            if chunks:
-                (run_dir / "output.partial.md").write_text(
-                    "".join(chunks), encoding="utf-8"
-                )
             if proc and proc.returncode is None:
                 proc.kill()
-            yield sse({"type": "error", "message": str(e), "run_dir": run_rel})
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-def _build_curate_kickoff(run_dir_abs: Path) -> str:
-    """Read CURATE_KICKOFF.md, substitute placeholders, append the INPUT block
-    of round-1 themes + corpus sample inlined from the run dir. Mirrors
-    _build_kickoff for the chapter flow."""
-    kickoff = CURATE_KICKOFF_PATH.read_text(encoding="utf-8")
-    kickoff = kickoff.replace("__RUN_DIR__", str(run_dir_abs))
-    kickoff = kickoff.replace("__SUBJECT__", wb.SUBJECT_NAME)
-
-    round1_themes = (run_dir_abs / "output.md").read_text(encoding="utf-8")
-    corpus_sample = (run_dir_abs / "input.md").read_text(encoding="utf-8")
-
-    return (
-        kickoff.rstrip("\n")
-        + "\n\n--- INPUT-START ---\n\n"
-        + "# Round-1 themes (the starting list)\n\n"
-        + round1_themes
-        + "\n\n# Corpus sample (your full context)\n\n"
-        + corpus_sample
-        + "\n\n--- INPUT-END ---\n"
-    )
-
-
-@app.websocket("/themes-curate")
-async def themes_curate(ws: WebSocket, session: str | None = None):
-    """Multi-turn curation chat against an existing themes run dir. The user
-    drops, merges, tightens, and proposes themes; on /lock the model writes
-    themes.md via the Write tool, which the file-watcher streams back.
-    Mirrors /session structurally."""
-    await ws.accept()
-    tasks: list[asyncio.Task] = []
-    run_dir: Path | None = None
-    cumulative_cost = 0.0
-
-    async def send(obj: dict):
-        try:
-            await ws.send_text(json.dumps(obj))
-        except Exception:
-            pass
-
-    if session != LEGACY_SESSION:
-        await send({"type": "error", "message": "themes curation is reserved for the legacy admin session"})
-        try:
-            await ws.close()
-        except Exception:
-            pass
-        return
-
-    try:
-        first = await ws.receive_json()
-        if first.get("type") != "start" or not first.get("run_dir"):
-            await send({"type": "error", "message": "first message must be {type:'start', run_dir}"})
+            if chunks:
+                (run_dir / "output.partial.md").write_text("".join(chunks), encoding="utf-8")
+            await send({"type": "error", "message": f"round-1 failed: {type(e).__name__}: {e}"})
             return
 
-        run_rel = first["run_dir"]
-        run_dir = (REPO / run_rel).resolve()
-        themes_root = THEMES_BASE.resolve()
-        try:
-            run_dir.relative_to(themes_root)
-        except ValueError:
-            await send({"type": "error", "message": "run_dir must be under themes/"})
-            return
-        if not (run_dir / "input.md").exists() or not (run_dir / "output.md").exists():
-            await send({"type": "error", "message": "run_dir missing input.md or output.md"})
+        round1_text = "".join(chunks)
+        (run_dir / "output.md").write_text(round1_text, encoding="utf-8")
+
+        if rc != 0 and not result_evt:
+            stderr = ""
+            if proc.stderr:
+                try:
+                    stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            await send({"type": "error", "message": f"claude exited {rc}: {stderr[-500:]}"})
             return
 
-        model_key = first.get("model")
-        model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
+        cumulative_cost += float((result_evt or {}).get("total_cost_usd", 0) or 0)
+        r1_usage = (result_evt or {}).get("usage", {}) if result_evt else {}
 
-        run_dir_abs = run_dir
+        await send({"type": "draft_update", "kind": "output", "content": round1_text})
+        await send({
+            "type": "turn_end",
+            "cost_usd": cumulative_cost,
+            "stop_reason": (result_evt or {}).get("stop_reason", "") or "",
+            "usage": r1_usage,
+        })
+
+        # ---- Phase 2: curate chat ----
         kickoff = _build_curate_kickoff(run_dir_abs)
         curate_system = CURATE_PATH.read_text(encoding="utf-8").replace(
             "__SUBJECT__", wb.SUBJECT_NAME
@@ -948,13 +978,10 @@ async def themes_curate(ws: WebSocket, session: str | None = None):
         settings_path = run_dir / ".claude-settings.json"
         settings_path.write_text(json.dumps(settings), encoding="utf-8")
 
-        await send({
-            "type": "spawned",
-            "model": model,
-            "run_dir": run_rel,
-        })
+        themes_relative = str((run_dir / "themes.md").relative_to(REPO))
 
         async def watch_files():
+            nonlocal finalize_pending
             paths = {"themes": run_dir / "themes.md"}
             mtimes: dict[str, float] = {}
             while True:
@@ -970,7 +997,16 @@ async def themes_curate(ws: WebSocket, session: str | None = None):
                             content = p.read_text(encoding="utf-8")
                         except Exception:
                             continue
-                        await send({"type": f"{kind}_update", "content": content})
+                        await send({"type": "draft_update", "kind": kind, "content": content})
+                        if finalize_pending and kind == "themes":
+                            finalize_pending = False
+                            await send({
+                                "type": "finalized",
+                                "content": content,
+                                "location": themes_relative,
+                                "words": len(content.split()),
+                                "overwritten": False,
+                            })
 
         watch_task = asyncio.create_task(watch_files())
         tasks = [watch_task]
@@ -986,7 +1022,6 @@ async def themes_curate(ws: WebSocket, session: str | None = None):
         def stderr_sync(line: str):
             asyncio.run_coroutine_threadsafe(stderr_cb(line), loop)
 
-        sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=curate_system,
@@ -1076,6 +1111,12 @@ async def themes_curate(ws: WebSocket, session: str | None = None):
                             await turn_task
                         await client.query(text)
                         turn_task = asyncio.create_task(drain_turn())
+                    elif mtype == "finalize":
+                        if not turn_task.done():
+                            await turn_task
+                        finalize_pending = True
+                        await client.query("/lock")
+                        turn_task = asyncio.create_task(drain_turn())
                 else:
                     client_recv.cancel()
                     try:
@@ -1154,9 +1195,11 @@ async def session(
     except HTTPException as e:
         await reject(e.detail)
         return
-    # Auth gate: legacy admin session bypasses email auth; everything else
-    # requires an auth token whose user owns the slug.
-    if session != LEGACY_SESSION:
+    # Auth gate: drafting requires an auth token whose user owns the slug.
+    # Samples are open to anonymous visitors so demos work without an account
+    # — note that drafts spawn a Claude subprocess on the host's dime and
+    # writes (run dirs, finalize) mutate the sample's own corpus tree.
+    if not is_sample_corpus(session):
         if not auth:
             await reject("auth required: missing ?auth= query param")
             return
@@ -1176,8 +1219,9 @@ async def session(
             await send({"type": "error", "message": "first message must be {type:'start', era}"})
             return
 
+        era = first["era"]
         try:
-            inputs = _prepare_run(first["era"], corpus_id=corpus_id, include_future=bool(first.get("future")))
+            inputs = _prepare_run(era, corpus_id=corpus_id, include_future=bool(first.get("future")))
         except HTTPException as e:
             await send({"type": "error", "message": e.detail})
             return
@@ -1212,7 +1256,7 @@ async def session(
 
         await send({
             "type": "spawned",
-            "era": first["era"],
+            "era": era,
             "model": model,
             "run_dir": inputs["run_rel"],
             "notes": inputs["notes_count"],
@@ -1223,7 +1267,7 @@ async def session(
             "input_chars": inputs["in_chars"],
         })
 
-        # Watch output.md / thinking.md and stream changes to the client.
+        # Watch output.md / thinking.md / threads.md and stream changes.
         async def watch_files():
             paths = {
                 "output": run_dir / "output.md",
@@ -1244,7 +1288,7 @@ async def session(
                             content = p.read_text(encoding="utf-8")
                         except Exception:
                             continue
-                        await send({"type": f"{kind}_update", "content": content})
+                        await send({"type": "draft_update", "kind": kind, "content": content})
 
         watch_task = asyncio.create_task(watch_files())
         tasks = [watch_task]
@@ -1360,6 +1404,21 @@ async def session(
                             await turn_task
                         await client.query(text)
                         turn_task = asyncio.create_task(drain_turn())
+                    elif mtype == "finalize":
+                        if not turn_task.done():
+                            await turn_task
+                        try:
+                            promoted = _promote_era_chapter(run_dir, era, corpus_id)
+                        except ValueError as exc:
+                            await send({"type": "error", "message": str(exc)})
+                            continue
+                        await send({
+                            "type": "finalized",
+                            "content": promoted["content"],
+                            "location": promoted["location"],
+                            "words": promoted["words"],
+                            "overwritten": promoted["overwritten"],
+                        })
                 else:
                     # Turn ended; cancel the dangling receive and loop to wait
                     # for the next user message.
@@ -1557,11 +1616,9 @@ async def import_notes(
 @app.post("/import/eras")
 async def import_eras(
     file: UploadFile = File(...),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Accept an eras.yaml for the session's corpus."""
-    if session == LEGACY_SESSION:
-        raise HTTPException(403, "cannot replace the legacy corpus's eras through the app")
     cdir = corpus_dir(session)
     try:
         content = await file.read()
@@ -1576,6 +1633,52 @@ async def import_eras(
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "eras.yaml").write_text(text, encoding="utf-8")
     return {"ok": True, "era_count": len(data)}
+
+
+@app.get("/samples")
+def list_samples():
+    """List all sample corpora (any `_corpora/<slug>/_meta.json` with
+    `"sample": true`). Open without auth — visitors can pick a sample
+    slug to set as their corpusSession and browse it read-only.
+
+    Returns: [{slug, title, description, source, note_count, era_count}]
+    sorted by title for stable display."""
+    out = []
+    if not CORPORA_ROOT.exists():
+        return out
+    for d in sorted(CORPORA_ROOT.iterdir()):
+        if not d.is_dir() or not is_sample_corpus(d.name):
+            continue
+        meta_path = d / "_meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        eras_yaml_path = d / "_config" / "eras.yaml"
+        era_count = 0
+        if eras_yaml_path.exists():
+            try:
+                loaded = yaml.safe_load(eras_yaml_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    era_count = len(loaded)
+            except Exception:
+                pass
+        notes_dir = d / "notes"
+        note_count = (
+            sum(1 for p in notes_dir.rglob("*") if p.is_file())
+            if notes_dir.exists()
+            else 0
+        )
+        out.append({
+            "slug": d.name,
+            "title": meta.get("title") or d.name,
+            "description": meta.get("description") or "",
+            "source": meta.get("source") or "",
+            "note_count": note_count,
+            "era_count": era_count,
+        })
+    out.sort(key=lambda x: x["title"].lower())
+    return out
 
 
 @app.get("/corpus")
@@ -1600,7 +1703,7 @@ def get_corpus(session: str = Depends(require_corpus_access)):
             eras = []
     return {
         "slug": session,
-        "is_legacy": session == LEGACY_SESSION,
+        "is_sample": is_sample_corpus(session),
         "note_count": note_count,
         "has_eras": has_eras,
         "eras": eras,
@@ -1609,12 +1712,10 @@ def get_corpus(session: str = Depends(require_corpus_access)):
 
 @app.post("/corpus/wipe")
 def wipe_corpus(
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
     auth_email: str | None = Depends(get_auth_optional),
 ):
-    """Hard-delete the session's corpus dir. Legacy is never wipeable here."""
-    if session == LEGACY_SESSION:
-        raise HTTPException(403, "cannot wipe the legacy corpus through the app")
+    """Hard-delete the session's corpus dir."""
     cdir = corpus_dir(session)
     shutil.rmtree(cdir)
     if auth_email:

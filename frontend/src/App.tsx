@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ErasView } from "./ErasView";
-import { ImportFlow, type CorpusInfo } from "./ImportFlow";
-import { ThemesView } from "./ThemesView";
+import { ChatWorkspace } from "./ChatWorkspace";
+import { EraTab } from "./EraTab";
+import { HeaderMenu } from "./HeaderMenu";
+import { ImportFlow, type CorpusInfo, type Sample } from "./ImportFlow";
 import {
   authHeaders,
   clearAuthToken,
@@ -25,14 +26,14 @@ export default function App() {
 
   // ---- Auth + corpus routing ----
   // Modes: loading (bootstrap) → login (no auth) → picker (pick corpus) →
-  // import (upload notes/eras) → ready (full app). Legacy admin bypasses
-  // login entirely via the LEGACY_SESSION secret in localStorage.
+  // import (upload notes/eras) → ready (full app).
   const [corpusMode, setCorpusMode] = useState<
     "loading" | "login" | "picker" | "import" | "ready" | "error"
   >("loading");
   const [corpusInfo, setCorpusInfo] = useState<CorpusInfo | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userCorpora, setUserCorpora] = useState<string[]>([]);
+  const [samples, setSamples] = useState<Sample[]>([]);
   const [loginEmail, setLoginEmail] = useState<string>("");
   const [loginSent, setLoginSent] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>("");
@@ -53,6 +54,19 @@ export default function App() {
     return me;
   }
 
+  // Best-effort fetch of the samples list. Open without auth, so we can
+  // show the cards on both login and picker screens. Failures are silent —
+  // the cards just don't render.
+  async function refreshSamples(): Promise<void> {
+    try {
+      const r = await fetch(`${API_BASE}/samples`);
+      if (!r.ok) return;
+      setSamples((await r.json()) as Sample[]);
+    } catch {
+      // ignore
+    }
+  }
+
   // Bootstrap: land magic-link, then route by auth + corpus state.
   useEffect(() => {
     (async () => {
@@ -63,8 +77,11 @@ export default function App() {
         history.replaceState(null, "", location.pathname + location.search);
       }
 
-      // 2. If a corpus session is already selected, try it first. This handles
-      //    legacy admin (LEGACY_SESSION secret) AND already-picked authed users.
+      // Kick off samples fetch in the background — they're for any non-ready
+      // routing destination (login or picker) and we don't want to block.
+      refreshSamples();
+
+      // 2. If a corpus session is already selected, try it first.
       const slug = getSession();
       if (slug) {
         const r = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
@@ -167,7 +184,9 @@ export default function App() {
   function handleSwitchCorpus() {
     clearSession();
     setCorpusInfo(null);
-    setCorpusMode("picker");
+    // Anonymous sample-viewers have no auth → route them back to login
+    // (which also lists the samples to pick another from).
+    setCorpusMode(getAuthToken() ? "picker" : "login");
   }
 
   // Wipes the current corpus and routes the parent away from "ready". Throws
@@ -193,6 +212,40 @@ export default function App() {
     }
   }
 
+  // Card-list of sample corpora — anonymous-readable, low-friction explore
+  // path. Rendered on both the login and picker screens.
+  function renderSamples(label: string) {
+    if (!samples.length) return null;
+    return (
+      <div className="mt-8 border-t border-stone-200 pt-6">
+        <p className="mb-3 text-xs uppercase tracking-wider text-stone-500">
+          {label}
+        </p>
+        <ul className="space-y-2">
+          {samples.map((s) => (
+            <li key={s.slug}>
+              <button
+                onClick={() => handlePickCorpus(s.slug)}
+                className="w-full rounded border border-stone-200 bg-white px-4 py-3 text-left hover:bg-stone-100"
+              >
+                <div className="font-serif text-sm text-stone-800">{s.title}</div>
+                {s.description && (
+                  <div className="mt-1 text-xs leading-relaxed text-stone-500">
+                    {s.description}
+                  </div>
+                )}
+                <div className="mt-1 font-mono text-[10px] text-stone-400">
+                  {s.note_count.toLocaleString()} entries · {s.era_count} era
+                  {s.era_count === 1 ? "" : "s"}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   return (
     <>
       {corpusMode === "loading" && (
@@ -209,7 +262,7 @@ export default function App() {
         </div>
       )}
       {corpusMode === "login" && (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="min-h-screen flex items-start justify-center bg-stone-50 py-16">
           <div className="max-w-md w-full p-8">
             <h1 className="font-serif text-2xl mb-2">Biographer</h1>
             {loginSent ? (
@@ -263,11 +316,12 @@ export default function App() {
                 )}
               </>
             )}
+            {!loginSent && renderSamples("Or explore a sample diary")}
           </div>
         </div>
       )}
       {corpusMode === "picker" && (
-        <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="min-h-screen flex items-start justify-center bg-stone-50 py-16">
           <div className="max-w-md w-full p-8">
             <h1 className="font-serif text-2xl mb-2">Welcome back</h1>
             <p className="text-stone-600 mb-6 text-sm leading-relaxed">
@@ -301,6 +355,7 @@ export default function App() {
                 Sign out
               </button>
             </div>
+            {renderSamples("Sample diaries")}
           </div>
         </div>
       )}
@@ -316,33 +371,72 @@ export default function App() {
           onWipe={handleWipe}
         />
       )}
-      {corpusMode === "ready" && corpusInfo && viewMode === "eras" && (
-        <ErasView
-          apiBase={API_BASE}
-          wsBase={WS_BASE}
-          corpusInfo={corpusInfo}
-          userEmail={userEmail}
-          userCorpora={userCorpora}
-          viewMode={viewMode}
-          onSetViewMode={setViewMode}
-          onWipe={handleWipe}
-          onSwitchCorpus={handleSwitchCorpus}
-          onLogout={handleLogout}
-        />
-      )}
-      {corpusMode === "ready" && corpusInfo && viewMode === "themes" && (
-        <ThemesView
-          apiBase={API_BASE}
-          wsBase={WS_BASE}
-          corpusInfo={corpusInfo}
-          userEmail={userEmail}
-          userCorpora={userCorpora}
-          viewMode={viewMode}
-          onSetViewMode={setViewMode}
-          onWipe={handleWipe}
-          onSwitchCorpus={handleSwitchCorpus}
-          onLogout={handleLogout}
-        />
+      {corpusMode === "ready" && corpusInfo && (
+        <div className="min-h-full">
+          <header className="border-b border-stone-200 bg-white">
+            <div className="mx-auto max-w-7xl px-6 py-4 flex items-center gap-4">
+              <h1 className="font-serif text-xl">Biographer</h1>
+              <div className="flex items-center gap-1 ml-2">
+                <button
+                  className={
+                    "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                    (viewMode === "eras"
+                      ? "text-stone-700 border-b-2 border-stone-700"
+                      : "text-stone-400 hover:text-stone-700")
+                  }
+                  onClick={() => setViewMode("eras")}
+                >
+                  Eras
+                </button>
+                <button
+                  className={
+                    "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                    (viewMode === "themes"
+                      ? "text-stone-700 border-b-2 border-stone-700"
+                      : "text-stone-400 hover:text-stone-700")
+                  }
+                  onClick={() => setViewMode("themes")}
+                >
+                  Themes
+                </button>
+              </div>
+              <div className="ml-auto">
+                <HeaderMenu
+                  isSample={corpusInfo.is_sample}
+                  userEmail={userEmail}
+                  hasMultipleCorpora={userCorpora.length > 1}
+                  onWipe={async () => {
+                    if (
+                      !window.confirm(
+                        "Wipe this corpus? This deletes all uploaded notes and eras from the host.",
+                      )
+                    ) {
+                      return;
+                    }
+                    try {
+                      await handleWipe();
+                    } catch (err) {
+                      setError(`wipe failed: ${(err as Error).message}`);
+                    }
+                  }}
+                  onSwitchCorpus={handleSwitchCorpus}
+                  onLogout={handleLogout}
+                />
+              </div>
+            </div>
+          </header>
+          {viewMode === "eras" ? (
+            <EraTab apiBase={API_BASE} wsBase={WS_BASE} />
+          ) : (
+            <ChatWorkspace
+              key="themes"
+              apiBase={API_BASE}
+              wsBase={WS_BASE}
+              scope={{ kind: "themes", topN: 7 }}
+              title="Themes"
+            />
+          )}
+        </div>
       )}
     </>
   );

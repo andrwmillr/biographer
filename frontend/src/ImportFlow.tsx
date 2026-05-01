@@ -3,10 +3,19 @@ import { authHeaders, setSession } from "./auth";
 
 export type CorpusInfo = {
   slug: string;
-  is_legacy: boolean;
+  is_sample: boolean;
   note_count: number;
   has_eras: boolean;
   eras: Array<{ name: string; start: string; end?: string }>;
+};
+
+export type Sample = {
+  slug: string;
+  title: string;
+  description: string;
+  source: string;
+  note_count: number;
+  era_count: number;
 };
 
 type ImportFlowProps = {

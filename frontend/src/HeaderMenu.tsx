@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type HeaderMenuProps = {
-  isLegacy: boolean;
+  isSample?: boolean;
   userEmail: string | null;
   hasMultipleCorpora: boolean;
   onWipe: () => void;
@@ -10,7 +10,7 @@ type HeaderMenuProps = {
 };
 
 export function HeaderMenu({
-  isLegacy,
+  isSample = false,
   userEmail,
   hasMultipleCorpora,
   onWipe,
@@ -38,9 +38,13 @@ export function HeaderMenu({
     };
   }, [open]);
 
-  const showWipe = !isLegacy;
-  const showSwitch = !!userEmail && hasMultipleCorpora;
+  // Samples are read-only — wipe is a 403 there. Show "Switch" whenever the
+  // user has somewhere to go: any signed-in user (the picker lists owned
+  // corpora + samples), or anon viewing a sample (route to login + samples).
+  const showWipe = !isSample;
+  const showSwitch = !!userEmail || isSample;
   const showLogout = !!userEmail;
+  const switchLabel = isSample && !userEmail ? "Browse other samples" : "Switch corpus";
   if (!showWipe && !showSwitch && !showLogout) return null;
 
   return (
@@ -77,7 +81,7 @@ export function HeaderMenu({
               className="block w-full px-3 py-1.5 text-left text-xs text-stone-700 hover:bg-stone-50"
               role="menuitem"
             >
-              Switch corpus
+              {switchLabel}
             </button>
           )}
           {showLogout && (

@@ -1,7 +1,6 @@
 // Auth + corpus-session helpers shared between App and ImportFlow.
 //
 // - corpusSession: the slug the browser is currently operating on.
-//                  For the legacy admin path, this is the LEGACY_SESSION secret.
 // - authToken:     proof of email ownership, set after the magic-link round trip.
 //                  Sent on every request alongside corpusSession.
 

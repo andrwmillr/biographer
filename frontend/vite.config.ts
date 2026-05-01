@@ -15,6 +15,7 @@ export default defineConfig({
       "/import": "http://localhost:8000",
       "/draft": "http://localhost:8000",
       "/promote": "http://localhost:8000",
+      "/samples": "http://localhost:8000",
       "/themes-spin": "http://localhost:8000",
       "/session": { target: "ws://localhost:8000", ws: true },
     },
