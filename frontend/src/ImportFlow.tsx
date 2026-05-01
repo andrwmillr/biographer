@@ -3,6 +3,7 @@ import { authHeaders, setSession } from "./auth";
 
 export type CorpusInfo = {
   slug: string;
+  title: string | null;
   is_sample: boolean;
   note_count: number;
   has_eras: boolean;

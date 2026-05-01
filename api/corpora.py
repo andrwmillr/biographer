@@ -258,8 +258,17 @@ def get_corpus(session: str = Depends(require_corpus_access)):
             eras = loaded if isinstance(loaded, list) else []
         except Exception:
             eras = []
+    title: str | None = None
+    meta_path = cdir / "_meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            title = (meta.get("title") or "").strip() or None
+        except Exception:
+            pass
     return {
         "slug": session,
+        "title": title,
         "is_sample": is_sample_corpus(session),
         "note_count": note_count,
         "has_eras": has_eras,

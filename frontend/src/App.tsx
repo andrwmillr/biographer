@@ -437,7 +437,19 @@ export default function App() {
                   Themes
                 </button>
               </div>
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-3">
+                {(corpusInfo.title || corpusInfo.slug) && (
+                  <span
+                    className="max-w-[40ch] truncate border-[3px] border-double border-stone-300 px-3 py-0.5 font-serif italic text-base text-stone-600"
+                    style={{
+                      backgroundColor: "rgba(120, 113, 108, 0.04)",
+                      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
+                    }}
+                    title={corpusInfo.title || corpusInfo.slug}
+                  >
+                    {corpusInfo.title || corpusInfo.slug}
+                  </span>
+                )}
                 <HeaderMenu
                   isSample={corpusInfo.is_sample}
                   userEmail={userEmail}
