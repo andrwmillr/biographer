@@ -160,16 +160,18 @@ def _promote_era_chapter(run_dir: Path, era_name: str, corpus_id: str) -> dict:
     }
 
 
-def _build_kickoff(run_dir_abs: Path, user_msg: str) -> str:
+def _build_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | None) -> str:
     """Read KICKOFF.md, substitute __RUN_DIR__, strip checkpoint markers,
-    append the era inputs between INPUT-START / INPUT-END. Mirrors run.sh."""
+    prepend the per-corpus subject identity block, and append the era inputs
+    between INPUT-START / INPUT-END. Mirrors run.sh."""
     kickoff = KICKOFF_PATH.read_text(encoding="utf-8")
     kickoff = kickoff.replace("__RUN_DIR__", str(run_dir_abs))
     kickoff = kickoff.replace("<!-- CHECKPOINTS:START -->\n", "").replace(
         "<!-- CHECKPOINTS:END -->\n", ""
     )
     return (
-        kickoff.rstrip("\n")
+        wb.subject_context_for(corpus_id)
+        + kickoff.rstrip("\n")
         + "\n\n--- INPUT-START ---\n\n"
         + user_msg
         + "\n\n--- INPUT-END ---\n"
@@ -223,8 +225,10 @@ async def draft(req: DraftRequest, session: str = Depends(require_writable)):
             )
             assert proc.stdin is not None and proc.stdout is not None
 
+            stdin_msg = wb.subject_context_for(corpus_id) + full_user_msg
+
             async def feed_stdin():
-                proc.stdin.write(full_user_msg.encode("utf-8"))
+                proc.stdin.write(stdin_msg.encode("utf-8"))
                 await proc.stdin.drain()
                 proc.stdin.close()
 
@@ -371,7 +375,7 @@ async def session(ws: WebSocket):
 
         run_dir = inputs["run_dir"]
         run_dir_abs = run_dir.resolve()
-        kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"])
+        kickoff = _build_kickoff(run_dir_abs, inputs["full_user_msg"], corpus_id)
 
         runs_parent_abs = run_dir_abs.parent
         settings = {

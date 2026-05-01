@@ -32,7 +32,7 @@ CORPUS_CACHE = CORPUS / "_derived" / "_corpus_cache.pkl"
 DATE_OVERRIDES = CORPUS / "_config" / "_date_overrides.json"
 NOTE_METADATA = CORPUS / "_config" / "_note_metadata.json"
 EDITOR_NOTE_PREFIX = "EDITOR NOTE:"
-MIXED_AUTHORSHIP_NOTE = "Contains quoted material — not all of this note is Andrew's own writing."
+MIXED_AUTHORSHIP_NOTE = "Contains quoted material — not all of this note is the subject's own writing."
 ERAS_FILE = CORPUS / "_config" / "eras.yaml"
 BIOGRAPHIES_DIR = CORPUS / "claude" / "biographies"
 CHAPTERS_DIR = BIOGRAPHIES_DIR / "chapters"
@@ -145,7 +145,38 @@ TASK_VARIANT = _pick_task()
 
 CHAPTER_SYSTEM = (Path(__file__).parent / "prompts" / "drafter.md").read_text(encoding="utf-8")
 CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__TASK__", TASK_VARIANTS[TASK_VARIANT])
-CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__SUBJECT__", SUBJECT_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Subject identity (per-corpus)
+# ---------------------------------------------------------------------------
+
+def subject_context_for(corpus_id=None):
+    """Return a kickoff-ready block identifying the subject of this corpus.
+    Reads `_meta.json` title/description; falls back to the SUBJECT_NAME env
+    default for the original Andrew corpus where no meta exists.
+
+    System prompts use generic phrasing ("the subject"); this block is what
+    actually tells the model who they're writing about. Inject at the top
+    of each kickoff message."""
+    paths = _corpus_paths(corpus_id)
+    meta_path = paths["root"] / "_meta.json"
+    title = ""
+    description = ""
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            title = (meta.get("title") or "").strip()
+            description = (meta.get("description") or "").strip()
+        except Exception:
+            pass
+    if not title:
+        title = SUBJECT_NAME
+    lines = [f"# Subject", "", f"You're writing about {title}."]
+    if description:
+        lines.append("")
+        lines.append(description)
+    return "\n".join(lines) + "\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -283,14 +314,19 @@ def sample_keeper(body, cap):
 
 
 def load_corpus_notes(corpus_id=None):
-    """Walk the corpus and return one record per note in the writing labels.
+    """Walk the corpus and return one record per .md file with a date.
     Records have rel, title, date — same shape Phase B expects, sourced
     directly from frontmatter rather than from Phase A's annotation pass.
 
-    Caches the parsed result to CORPUS_CACHE. The cache holds only frontmatter-
-    derived fields; note bodies are still loaded on demand from disk via
-    parse_note_body(). Delete the cache file to force a fresh walk after
-    edits to note files or the parser."""
+    Layout-agnostic: any depth, any folder name. The first path segment
+    of `rel` is used downstream as a "label" (folder_aware_sample buckets
+    by it; the chapter prompt surfaces it). Hidden directories
+    (`.git`, `.obsidian`, etc.) are skipped.
+
+    Caches the parsed result to CORPUS_CACHE. The cache holds only
+    frontmatter-derived fields; note bodies are still loaded on demand
+    from disk via parse_note_body(). Delete the cache file to force a
+    fresh walk after edits to note files or the parser."""
     paths = _corpus_paths(corpus_id)
     cache = paths["cache"]
     notes_root = paths["notes"]
@@ -304,16 +340,12 @@ def load_corpus_notes(corpus_id=None):
     if not notes_root.exists():
         return out
 
-    # Two layouts supported:
-    #   - Andrew-style: notes/<label>/*.md where label ∈ WRITING_LABELS
-    #   - Flat: notes/*.md (used by friend corpora that didn't get a layout)
     # Date discovery: frontmatter `date_created` first, else filename
     # YYYY-MM-DD prefix (covers Thoreau-style imports without frontmatter).
     for path in sorted(notes_root.rglob("*.md")):
         rel = path.relative_to(notes_root)
-        if len(rel.parts) > 2:
-            continue
-        if len(rel.parts) == 2 and rel.parts[0] not in WRITING_LABELS:
+        # Skip hidden directories (Obsidian configs, dotfiles, etc.).
+        if any(part.startswith(".") for part in rel.parts):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)

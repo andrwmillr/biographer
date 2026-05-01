@@ -77,12 +77,13 @@ def _prepare_themes_run(top_n: int = 7, corpus_id: str | None = None) -> dict:
     }
 
 
-def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str) -> str:
+def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str | None) -> str:
     """Build a single-phase themes kickoff: generate round-1 themes
     inline in chat, then transition to curate orientation. Replaces the
     old two-phase flow (`claude -p` round-1 then curate)."""
     return (
-        f"You're starting a fresh themes session for {wb.SUBJECT_NAME}'s corpus. "
+        wb.subject_context_for(corpus_id)
+        + "You're starting a fresh themes session. "
         "The corpus sample is inlined between INPUT-START / INPUT-END below — "
         "treat it as the entirety of your authorized source material.\n\n"
         "**First, generate round-1 themes** following the rules in your system "
@@ -219,18 +220,14 @@ async def themes_curate(ws: WebSocket):
         # session. System prompt combines both; kickoff inlines the corpus
         # sample and instructs the agent to generate round-1, then enter
         # curate orientation. Streaming is visible from the first token.
-        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8").replace(
-            "__SUBJECT__", wb.SUBJECT_NAME
-        )
-        curate_prompt = CURATE_PATH.read_text(encoding="utf-8").replace(
-            "__SUBJECT__", wb.SUBJECT_NAME
-        )
+        themes_r1_prompt = THEMES_R1_PATH.read_text(encoding="utf-8")
+        curate_prompt = CURATE_PATH.read_text(encoding="utf-8")
         combined_system = (
             themes_r1_prompt.rstrip("\n")
             + "\n\n---\n\n"
             + curate_prompt
         )
-        kickoff = _build_themes_kickoff(run_dir_abs, full_user_msg)
+        kickoff = _build_themes_kickoff(run_dir_abs, full_user_msg, corpus_id)
 
         runs_parent_abs = run_dir_abs.parent
         settings = {

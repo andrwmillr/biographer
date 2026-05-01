@@ -127,21 +127,20 @@ MAX_RETRIES = 8
 # Summary system prompt (CLI-only; web flow doesn't run the summary step)
 # ---------------------------------------------------------------------------
 
-SUMMARY_SYSTEM = """You are writing the opening synthesis to a retrospective on __SUBJECT__'s personal writing archive, 2011-2026. Plain third-person voice — a thoughtful biographer, not a literary critic.
+SUMMARY_SYSTEM = """You are writing the opening synthesis to a retrospective on the subject's personal writing archive. Plain third-person voice — a thoughtful biographer, not a literary critic. The user message will identify the subject and the period covered.
 
-You'll receive five era chapters. Write 250-450 words covering the through-lines: what preoccupied him across all fifteen years, what changed, what didn't, what the arc looks like from a distance.
+You'll receive every era chapter the retrospective contains. Write 250-450 words covering the through-lines: what preoccupied them across the whole archive, what changed, what didn't, what the arc looks like from a distance.
 
 VOICE
-Plain, direct English. Short sentences welcome. Write so a friend can follow. Third person. No literary-critic jargon ("revisionary sentence", "ars poetica", "the register", "signature gesture", etc.). No ornate sentence structures for their own sake.
+Plain, direct English. Short sentences welcome. Write so a friend can follow. Third person — refer to the subject by name and use the pronouns the chapters establish. No literary-critic jargon ("revisionary sentence", "ars poetica", "the register", "signature gesture", etc.). No ornate sentence structures for their own sake.
 
 ABSOLUTE RULES
 - Work only from what the chapters say. Don't introduce new specifics, names, dates, or quotes.
 - If you use a quote or specific detail from a chapter, keep any [YYYY-MM-DD] citation it carries.
 - No invented imagery. Abstract patterns are fine without citation; specifics need the source chapter's anchor.
 - No "in conclusion", no enumerating the era names, no "this retrospective".
-- Third person for __SUBJECT__. No sentimentalizing.
+- Third person for the subject. No sentimentalizing.
 - If being accurate and plain makes the paragraph thinner, that's fine."""
-SUMMARY_SYSTEM = SUMMARY_SYSTEM.replace("__SUBJECT__", SUBJECT_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +400,11 @@ async def write_chapter(client, era_name, notes, prior_chapters_list=None, prior
 
 
 async def write_summary(client, chapters, by_era):
+    from core.corpus import subject_context_for
     parts = []
     for era_name, text, _ in chapters:
         parts.append(f"## {era_heading(era_name, by_era[era_name])}\n\n{text}")
-    user_msg = "ERA CHAPTERS:\n\n" + "\n\n".join(parts)
+    user_msg = subject_context_for() + "ERA CHAPTERS:\n\n" + "\n\n".join(parts)
     log(f"→ summary  starting  ({len(user_msg):,} chars in)")
     t0 = time.time()
     resp = await client.messages.create(

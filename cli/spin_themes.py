@@ -34,7 +34,7 @@ from core.sampling import build_input
 
 CORPUS = wb.CORPUS
 THEMES_PROMPT_PATH = Path(__file__).resolve().parent.parent / "core" / "prompts" / "themes_r1.md"
-THEMES_PROMPT = THEMES_PROMPT_PATH.read_text(encoding="utf-8").replace("__SUBJECT__", wb.SUBJECT_NAME)
+THEMES_PROMPT = THEMES_PROMPT_PATH.read_text(encoding="utf-8")
 
 OUT_DIR = CORPUS / "claude" / "themes" / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 

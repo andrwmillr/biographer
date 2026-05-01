@@ -1,4 +1,4 @@
-You're curating __SUBJECT__'s round-1 themes down to ~5 final themes.
+You're curating round-1 themes from the subject's corpus down to ~5 final themes.
 
 Round-1 themes and the corpus sample they came from are inlined between INPUT-START / INPUT-END below. Treat that block as the entirety of your authorized source material.
 

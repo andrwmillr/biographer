@@ -2,7 +2,7 @@
 
 ## FRAME
 
-You're reading across all of __SUBJECT__'s personal writing archive to propose recurring themes that span multiple eras. The user will pick 2-3 themes to deepen in subsequent rounds; others get accepted as-is or dropped. This is a substrate for iteration, not a polished output.
+You're reading across all of the subject's personal writing archive to propose recurring themes that span multiple eras. The user will pick 2-3 themes to deepen in subsequent rounds; others get accepted as-is or dropped. This is a substrate for iteration, not a polished output.
 
 You'll see era metadata (date ranges, note counts) and a folder-aware sample of notes per era — the longest journal entries, all poetry, all letters, and the longest creative pieces. The user message will tell you the per-era cap. Short journal and creative notes outside the sample aren't shown. Your job is to surface candidates from the available signal, not be exhaustive — and to be honest with yourself about what the sample doesn't reveal.
 

@@ -266,6 +266,49 @@ def test_themes_top_n_requires_session(client: TestClient, auth_token: str):
     assert r.status_code == 401
 
 
+def test_load_corpus_notes_handles_arbitrary_layouts(client: TestClient, auth_token: str):
+    """`load_corpus_notes` used to only accept depth-1 (flat) or depth-2
+    where the parent dir was in {journal, creative, poetry, letter,
+    fiction}. Anything else got silently dropped. Now it accepts any
+    depth, any folder name; only hidden dirs (`.git`, `.obsidian`, etc.)
+    are skipped."""
+    zip_bytes = _build_zip({
+        # Flat — always worked.
+        "2020-01-15.md": "flat note",
+        # New: arbitrary single-segment folder (was rejected: not in WRITING_LABELS).
+        "diary/2020-02-15.md": "diary entry",
+        # New: nested by year (was rejected: depth > 2 OR top dir not in labels).
+        "2020/03/2020-03-15.md": "nested by year and month",
+        # Skipped: hidden dir.
+        ".obsidian/2020-04-15.md": "should not appear",
+        # Old WRITING_LABELS layout still works.
+        "journal/2020-05-15.md": "journal entry",
+    })
+    headers_auth = {"X-Auth-Token": auth_token}
+
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=headers_auth,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    # Import response counts extracted .md files (5); load_corpus_notes
+    # additionally skips hidden dirs.
+    assert data["note_count"] == 5
+    slug = data["slug"]
+
+    # Walk the actual loaded state — this is where the layout rules apply.
+    notes = wb.load_corpus_notes(slug)
+    rels = sorted(n["rel"] for n in notes)
+    assert rels == [
+        "2020-01-15.md",
+        "2020/03/2020-03-15.md",
+        "diary/2020-02-15.md",
+        "journal/2020-05-15.md",
+    ], f"unexpected rels (.obsidian/ should be skipped): {rels}"
+
+
 def test_delete_account_removes_everything(client: TestClient):
     """`/auth/delete-account` must wipe the user's corpora, drop the
     user record, kill all their sessions, and clear pending magic-link
