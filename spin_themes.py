@@ -22,9 +22,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# Reuse helpers from write_biography.
+# Reuse helpers from the shared corpus module.
 sys.path.insert(0, str(Path(__file__).parent))
-import write_biography as wb
+import corpus as wb  # alias preserves existing wb.X references
 
 
 CORPUS = wb.CORPUS
