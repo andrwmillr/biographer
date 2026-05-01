@@ -57,16 +57,14 @@ export function EraTab({
     );
   }
 
-  // Era label rendered centered in the Draft pane header. Picker itself
-  // lives in the Chapters dropdown in the global header.
+  // Era label rendered as a sticky banner inside the Draft pane.
+  // Picker itself lives in the Chapters dropdown in the global header.
   const range = formatEraRange(era.start, era.end);
   const eraLabel = (
-    <span className="font-serif italic text-sm text-stone-700 truncate">
+    <>
       {era.name}
-      {range && (
-        <span className="ml-1 not-italic text-stone-400">({range})</span>
-      )}
-    </span>
+      {range ? `, ${range}` : ""}
+    </>
   );
 
   return (

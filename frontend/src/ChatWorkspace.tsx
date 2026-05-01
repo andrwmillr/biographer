@@ -825,21 +825,31 @@ export function ChatWorkspace({
     return (
       <article
         className={
-          "h-full overflow-auto bg-white p-6 font-serif text-[16px] leading-[1.7] text-stone-900 " +
+          "h-full overflow-auto bg-white font-serif text-[16px] leading-[1.7] text-stone-900 " +
           (phase === "finalized" ? "ring-1 ring-inset ring-emerald-200" : "")
         }
       >
-        {draft ? (
-          <Markdown
-            content={draft}
-            variant="chapter"
-            onCiteClick={handleCiteClick}
-          />
-        ) : (
-          <span className="font-sans text-sm text-stone-400">
-            (no draft content yet)
-          </span>
+        {draftHeaderSlot && (
+          <div className="sticky top-0 z-10 bg-white">
+            <div className="px-6 pt-2 pb-3 text-center font-serif text-lg text-stone-800">
+              {draftHeaderSlot}
+            </div>
+            <div className="mx-12 h-px bg-gradient-to-r from-transparent via-stone-300 to-transparent" />
+          </div>
         )}
+        <div className="px-6 pb-6 pt-3">
+          {draft ? (
+            <Markdown
+              content={draft}
+              variant="chapter"
+              onCiteClick={handleCiteClick}
+            />
+          ) : (
+            <span className="font-sans text-sm text-stone-400">
+              (no draft content yet)
+            </span>
+          )}
+        </div>
       </article>
     );
   }
@@ -865,16 +875,9 @@ export function ChatWorkspace({
 
   function PaneHeader({ id, popped = false }: { id: PaneId; popped?: boolean }) {
     const isCollapsed = collapsed[id];
-    const showCenterSlot =
-      id === "draft" && draftHeaderSlot && !popped && !isCollapsed;
     return (
       <div className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
-        <span
-          className={
-            "font-sans text-[11px] uppercase tracking-wider text-stone-500 shrink-0 " +
-            (showCenterSlot ? "flex-1" : "")
-          }
-        >
+        <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500 shrink-0">
           {PANE_TITLES[id]}
           {id === "chat" && cost > 0 && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
@@ -892,17 +895,7 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
-        {showCenterSlot && (
-          <div className="flex items-center justify-center min-w-0">
-            {draftHeaderSlot}
-          </div>
-        )}
-        <div
-          className={
-            "flex items-center gap-1.5 " +
-            (showCenterSlot ? "flex-1 justify-end" : "ml-auto")
-          }
-        >
+        <div className="flex items-center gap-1.5 ml-auto">
           {id === "draft" && sessionLive && (
             <button
               onClick={sendStop}
