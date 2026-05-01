@@ -198,10 +198,28 @@ def build_themes(corpus_id: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: build_canonical.py <corpus_slug>", file=sys.stderr)
+    args = sys.argv[1:]
+    if not args:
+        print(
+            "Usage: build_canonical.py <corpus_slug> [--era <name>] [--themes-only] [--skip-themes]",
+            file=sys.stderr,
+        )
         sys.exit(2)
-    slug = sys.argv[1]
+    slug = args[0]
+    era_filter: str | None = None
+    themes_only = False
+    skip_themes = False
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a == "--era" and i + 1 < len(args):
+            era_filter = args[i + 1]; i += 2
+        elif a == "--themes-only":
+            themes_only = True; i += 1
+        elif a == "--skip-themes":
+            skip_themes = True; i += 1
+        else:
+            print(f"Unknown flag: {a}", file=sys.stderr); sys.exit(2)
 
     paths = wb._corpus_paths(slug)
     if not paths["notes"].exists():
@@ -210,24 +228,35 @@ def main() -> None:
 
     log(f"corpus: {slug}")
 
-    notes = wb.load_corpus_notes(slug)
-    wb.apply_date_overrides(notes, slug)
-    wb.apply_note_metadata(notes, slug)
-    eras = wb.load_eras(slug)
+    if not themes_only:
+        notes = wb.load_corpus_notes(slug)
+        wb.apply_date_overrides(notes, slug)
+        wb.apply_note_metadata(notes, slug)
+        eras = wb.load_eras(slug)
 
-    by_era: dict[str, list] = {}
-    for n in notes:
-        e = wb.era_of(n.get("date", ""), eras)
-        if e:
-            by_era.setdefault(e, []).append(n)
+        by_era: dict[str, list] = {}
+        for n in notes:
+            e = wb.era_of(n.get("date", ""), eras)
+            if e:
+                by_era.setdefault(e, []).append(n)
 
-    eras_with_notes = [(name, by_era[name]) for name, _, _ in eras if by_era.get(name)]
-    log(f"{len(eras_with_notes)}/{len(eras)} eras have notes; chapters first, then themes")
+        eras_with_notes = [(name, by_era[name]) for name, _, _ in eras if by_era.get(name)]
+        if era_filter:
+            eras_with_notes = [(n, en) for n, en in eras_with_notes if n == era_filter]
+            if not eras_with_notes:
+                log(f"--era {era_filter!r} matched no era with notes")
+                sys.exit(1)
+        log(f"{len(eras_with_notes)} era(s) selected; chapters first")
 
-    for name, era_notes in eras_with_notes:
-        build_chapter(slug, name, era_notes, by_era)
+        for name, era_notes in eras_with_notes:
+            build_chapter(slug, name, era_notes, by_era)
 
-    log("chapters done; running themes round-1 + auto-curate")
+    if skip_themes:
+        log("done (chapters only).")
+        return
+
+    if not themes_only:
+        log("chapters done; running themes round-1 + auto-curate")
     build_themes(slug)
 
     log("done.")
