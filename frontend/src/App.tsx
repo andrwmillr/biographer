@@ -469,7 +469,7 @@ export default function App() {
       {corpusMode === "ready" && corpusInfo && (
         <div className="min-h-full">
           <header className="border-b border-stone-200 bg-white">
-            <div className="mx-auto max-w-7xl px-6 py-4 flex items-center gap-4">
+            <div className="mx-auto max-w-[120rem] px-6 py-4 flex items-center gap-4">
               <div className="flex flex-1 items-center gap-4 min-w-0">
                 <h1 className="font-serif text-xl shrink-0">Biographer</h1>
                 <div className="flex items-center gap-1 ml-2">
@@ -497,30 +497,30 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {viewMode === "eras" && eras.length > 0 && (
-                <select
-                  name="era"
-                  className="font-serif text-lg text-stone-900 bg-transparent border-0 border-b border-stone-200 hover:border-stone-400 focus:border-stone-600 focus:outline-none px-1 py-0.5"
-                  value={selectedEra ?? ""}
-                  onChange={(e) => setSelectedEra(e.target.value)}
-                  title="Select chapter"
+              {(corpusInfo.title || corpusInfo.slug) && (
+                <button
+                  type="button"
+                  onClick={handleSwitchCorpus}
+                  className="max-w-[40ch] shrink truncate border-[3px] border-double border-stone-300 px-3 py-0.5 font-serif italic text-base text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-800"
+                  style={{
+                    backgroundColor: "rgba(120, 113, 108, 0.04)",
+                    boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
+                  }}
+                  title={`${corpusInfo.title || corpusInfo.slug} — click to switch corpus`}
                 >
-                  {eras.map((e) => {
-                    const range = formatEraRange(e.start, e.end);
-                    return (
-                      <option key={e.name} value={e.name} disabled={e.note_count === 0}>
-                        {e.name}
-                        {range ? ` (${range})` : ""}
-                        {e.note_count === 0 ? " (empty)" : ""}
-                      </option>
-                    );
-                  })}
-                </select>
+                  {corpusInfo.title || corpusInfo.slug}
+                </button>
               )}
               <div className="flex flex-1 items-center justify-end gap-3 min-w-0">
                 <select
                   name="model"
-                  className="rounded border border-stone-300 bg-white px-2 py-1 text-sm"
+                  className="appearance-none bg-transparent border-0 border-b border-dotted border-stone-300 hover:border-stone-500 focus:border-stone-700 focus:outline-none pl-1 pr-5 py-0.5 font-sans text-xs text-stone-500 hover:text-stone-700 cursor-pointer tabular-nums"
+                  style={{
+                    backgroundImage:
+                      "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23a8a29e' stroke-width='1.2' d='M1 1l4 4 4-4'/%3E%3C/svg%3E\")",
+                    backgroundRepeat: "no-repeat",
+                    backgroundPosition: "right 2px center",
+                  }}
                   value={model}
                   onChange={(e) => setModel(e.target.value as (typeof MODELS)[number])}
                   title="Model used for new sessions"
@@ -531,20 +531,6 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                {(corpusInfo.title || corpusInfo.slug) && (
-                  <button
-                    type="button"
-                    onClick={handleSwitchCorpus}
-                    className="max-w-[40ch] truncate border-[3px] border-double border-stone-300 px-3 py-0.5 font-serif italic text-base text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-800"
-                    style={{
-                      backgroundColor: "rgba(120, 113, 108, 0.04)",
-                      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
-                    }}
-                    title={`${corpusInfo.title || corpusInfo.slug} — click to switch corpus`}
-                  >
-                    {corpusInfo.title || corpusInfo.slug}
-                  </button>
-                )}
                 <HeaderMenu
                   isSample={corpusInfo.is_sample}
                   userEmail={userEmail}
@@ -574,6 +560,7 @@ export default function App() {
               wsBase={WS_BASE}
               eras={eras}
               selectedEra={selectedEra}
+              setSelectedEra={setSelectedEra}
               model={model}
               onChapterFinalized={reloadEras}
             />

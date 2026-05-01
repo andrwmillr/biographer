@@ -29,6 +29,10 @@ type ChatWorkspaceProps = {
   // refetch the era list so chapter date ranges update after a draft is
   // promoted.
   onFinalized?: (info: FinalizedInfo) => void;
+  // Optional content rendered next to the "NOTES" label in the Notes
+  // pane header. Used by the chapters tab to host the chapter picker
+  // (eras tab fills it; themes leaves it null).
+  notesHeaderSlot?: ReactNode;
 };
 
 type WSStatus =
@@ -71,6 +75,7 @@ export function ChatWorkspace({
   scope,
   model,
   onFinalized,
+  notesHeaderSlot,
 }: ChatWorkspaceProps) {
   const [phase, setPhase] = useState<Phase>("pre-gen");
 
@@ -847,9 +852,16 @@ export function ChatWorkspace({
 
   function PaneHeader({ id, popped = false }: { id: PaneId; popped?: boolean }) {
     const isCollapsed = collapsed[id];
+    const showCenterSlot =
+      id === "notes" && notesHeaderSlot && !popped && !isCollapsed;
     return (
-      <div className="flex items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
-        <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500">
+      <div className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
+        <span
+          className={
+            "font-sans text-[11px] uppercase tracking-wider text-stone-500 shrink-0 " +
+            (showCenterSlot ? "flex-1" : "")
+          }
+        >
           {PANE_TITLES[id]}
           {id === "chat" && cost > 0 && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
@@ -867,7 +879,17 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
-        <div className="flex items-center gap-1.5">
+        {showCenterSlot && (
+          <div className="flex items-center justify-center min-w-0">
+            {notesHeaderSlot}
+          </div>
+        )}
+        <div
+          className={
+            "flex items-center gap-1.5 " +
+            (showCenterSlot ? "flex-1 justify-end" : "ml-auto")
+          }
+        >
           {id === "draft" && sessionLive && (
             <button
               onClick={sendStop}
