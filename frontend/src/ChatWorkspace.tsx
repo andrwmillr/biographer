@@ -576,13 +576,13 @@ export function ChatWorkspace({
     // don't want the next mount-effect to auto-attach to the abandoned
     // session. GC will reap it after 30 min.
     setRunId(null);
-    // Reset the workspace to its initial state so the prompter goes
-    // back to "Press ▶ to start…". `cost` survives so the user keeps
-    // the running tally of what they've spent on this scope.
+    // Reset only the prompter / session-status surface back to its OG
+    // state — the chat log and the draft stay so the user can review
+    // the run after stopping. cost is preserved so the running tally
+    // survives. (Hitting ▶ again will start a fresh session that
+    // appends to the existing log.)
     setWsStatus("idle");
     setPhase("pre-gen");
-    setLog([]);
-    setDraft("");
     setSpawned(null);
     setFinalized(null);
     setReplyText("");
