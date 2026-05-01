@@ -424,8 +424,13 @@ export function ChatWorkspace({
     wsStatus === "connecting" ||
     wsStatus === "generating" ||
     wsStatus === "awaiting_reply";
+  // Era flow needs a draft on disk (output.md) before lock — Finalize
+  // promotes that file to chapters/. Themes writes themes.md only on
+  // /lock itself, so there's no pre-lock draft to require.
   const canFinalize =
-    phase === "iterating" && wsStatus === "awaiting_reply" && !!draft;
+    phase === "iterating" &&
+    wsStatus === "awaiting_reply" &&
+    (scope.kind === "themes" || !!draft);
 
   const promptStatus: "pre-gen" | "generating" | "awaiting_reply" | "finalized" =
     phase === "finalized"
@@ -825,10 +830,10 @@ export function ChatWorkspace({
             title={
               phase === "finalized"
                 ? "already finalized"
-                : !draft
-                  ? "no draft yet"
-                  : wsStatus !== "awaiting_reply"
-                    ? "wait for the agent"
+                : wsStatus !== "awaiting_reply"
+                  ? "wait for the agent"
+                  : scope.kind === "era" && !draft
+                    ? "no draft yet"
                     : "lock the current draft to disk"
             }
           >
