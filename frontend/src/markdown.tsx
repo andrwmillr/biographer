@@ -84,9 +84,18 @@ export function formatTool(name: string, input: unknown, runDir: string): string
   return verb;
 }
 
-// Wrap bare `[YYYY-MM-DD]` citations in markdown link syntax pointing at #cite-<date>.
+// Wrap citation patterns in markdown link syntax pointing at #cite-<date>.
+//   - `[YYYY-MM-DD]` (bracketed)                  — anywhere
+//   - `- YYYY-MM-DD` / `* YYYY-MM-DD` (list-item) — bare date at start of a list item
+// The list-item form is a fallback for when the themes agent strips brackets
+// off the prompt template; the bracketed form is the canonical citation.
 function wrapCitations(text: string): string {
-  return text.replace(/(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g, "[\\[$1\\]](#cite-$1)");
+  return text
+    .replace(/(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g, "[\\[$1\\]](#cite-$1)")
+    .replace(
+      /^(\s*[-*]\s+)(\d{4}-\d{2}-\d{2})(?=\s|$)/gm,
+      "$1[$2](#cite-$2)",
+    );
 }
 
 type MarkdownProps = {

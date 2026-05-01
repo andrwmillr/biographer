@@ -45,9 +45,11 @@ For each theme:
 **Eras:** [comma-separated era names]
 
 **Candidate notes:**
-- [YYYY-MM-DD] — [one-line gloss of what this note contributes]
+- [YYYY-MM-DD] — one-line gloss of what this note contributes
 - [YYYY-MM-DD] — ...
 ~~~
+
+Keep the literal `[…]` square brackets around each date — those aren't placeholder markers, they're citation syntax and render as clickable links to the note in the UI. Replace only `YYYY-MM-DD` with the actual date.
 
 After all themes, end your turn. Don't summarize, don't propose next steps.
 

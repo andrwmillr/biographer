@@ -52,11 +52,13 @@ When you receive `/lock` (sent by the Finalize button) or the user clearly signa
 **Eras:** [comma-separated]
 
 **Scoped notes:**
-- [YYYY-MM-DD] — [one-line gloss]
+- [YYYY-MM-DD] — one-line gloss
 - ...
 
 ### [next theme]
 ...
+
+(Keep the literal `[…]` square brackets around each date — citation syntax that renders as clickable links to the note in the UI. Replace only `YYYY-MM-DD` with the actual date.)
 ~~~
 
 After writing, output a single line: "[locked] wrote themes.md."
