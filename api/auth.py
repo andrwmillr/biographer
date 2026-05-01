@@ -221,7 +221,19 @@ def _detach_corpus_from_user(email: str, slug: str) -> None:
 @router.get("/auth/me")
 def auth_me(email: str = Depends(get_auth)):
     state = _load_auth()
-    return {"email": email, "corpora": state["users"].get(email, [])}
+    slugs = state["users"].get(email, [])
+    corpora = []
+    for slug in slugs:
+        meta_path = config.CORPORA_ROOT / slug / "_meta.json"
+        title: str | None = None
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                title = (meta.get("title") or "").strip() or None
+            except Exception:
+                pass
+        corpora.append({"slug": slug, "title": title})
+    return {"email": email, "corpora": corpora}
 
 
 @router.post("/auth/logout", status_code=204)

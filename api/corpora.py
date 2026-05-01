@@ -18,6 +18,7 @@ import yaml
 from api.auth import _load_auth, get_auth_optional
 from api.config import ADMIN_EMAILS
 from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel
 
 from core import corpus as wb
 
@@ -282,3 +283,34 @@ def get_corpus(session: str = Depends(require_corpus_access)):
         "has_eras": has_eras,
         "eras": eras,
     }
+
+
+class RenameCorpusRequest(BaseModel):
+    title: str | None
+
+
+@router.patch("/corpus")
+def rename_corpus(req: RenameCorpusRequest, session: str = Depends(require_writable)):
+    """Update the corpus's display title in `_meta.json`. Pass `null` (or
+    an empty string) to clear it; the picker / header tag fall back to
+    the slug when no title is set. Samples are read-only via
+    require_writable."""
+    cdir = corpus_dir(session)
+    meta_path = cdir / "_meta.json"
+    title = (req.title or "").strip() or None
+    if title and len(title) > 200:
+        raise HTTPException(400, "title too long (max 200 chars)")
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    else:
+        meta = {}
+    if title is None:
+        meta.pop("title", None)
+    else:
+        meta["title"] = title
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    return {"slug": session, "title": title}

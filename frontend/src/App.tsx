@@ -54,7 +54,9 @@ export default function App() {
   >("loading");
   const [corpusInfo, setCorpusInfo] = useState<CorpusInfo | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userCorpora, setUserCorpora] = useState<string[]>([]);
+  const [userCorpora, setUserCorpora] = useState<
+    { slug: string; title: string | null }[]
+  >([]);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [loginEmail, setLoginEmail] = useState<string>("");
   const [loginSent, setLoginSent] = useState<boolean>(false);
@@ -98,7 +100,10 @@ export default function App() {
 
   // Refresh /auth/me to pick up newly-imported corpora and verify the token
   // is still valid. Returns the parsed user record or null on auth failure.
-  async function refreshUser(): Promise<{ email: string; corpora: string[] } | null> {
+  async function refreshUser(): Promise<{
+    email: string;
+    corpora: { slug: string; title: string | null }[];
+  } | null> {
     if (!getAuthToken()) return null;
     const r = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
     if (r.status === 401) {
@@ -106,10 +111,47 @@ export default function App() {
       return null;
     }
     if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-    const me = (await r.json()) as { email: string; corpora: string[] };
+    const me = (await r.json()) as {
+      email: string;
+      corpora: { slug: string; title: string | null }[];
+    };
     setUserEmail(me.email);
     setUserCorpora(me.corpora);
     return me;
+  }
+
+  async function renameCorpus(slug: string, currentTitle: string | null) {
+    const next = window.prompt(
+      "Rename this corpus:",
+      currentTitle ?? "",
+    );
+    if (next === null) return; // user cancelled
+    const trimmed = next.trim();
+    const tok = getAuthToken();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Corpus-Session": slug,
+    };
+    if (tok) headers["X-Auth-Token"] = tok;
+    try {
+      const r = await fetch(`${API_BASE}/corpus`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ title: trimmed || null }),
+      });
+      if (!r.ok) {
+        setError(`rename failed: HTTP ${r.status}: ${await r.text()}`);
+        return;
+      }
+      await refreshUser();
+      // If the renamed corpus is the one currently open, update its title
+      // in corpusInfo so the header tag reflects the change immediately.
+      if (corpusInfo?.slug === slug) {
+        setCorpusInfo({ ...corpusInfo, title: trimmed || null });
+      }
+    } catch (e) {
+      setError(`rename failed: ${(e as Error).message}`);
+    }
   }
 
   // Best-effort fetch of the samples list. Open without auth, so we can
@@ -425,13 +467,31 @@ export default function App() {
               corpus to open.
             </p>
             <ul className="space-y-2">
-              {userCorpora.map((slug) => (
-                <li key={slug}>
+              {userCorpora.map(({ slug, title }) => (
+                <li key={slug} className="flex items-stretch gap-1">
                   <button
                     onClick={() => handlePickCorpus(slug)}
-                    className="w-full text-left rounded border border-stone-200 bg-white px-4 py-3 text-sm font-mono hover:bg-stone-100"
+                    className="flex-1 text-left rounded border border-stone-200 bg-white px-4 py-3 hover:bg-stone-100"
                   >
-                    {slug}
+                    {title ? (
+                      <>
+                        <span className="block text-sm text-stone-900">
+                          {title}
+                        </span>
+                        <span className="block font-mono text-[10px] text-stone-400">
+                          {slug}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-sm font-mono">{slug}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => renameCorpus(slug, title)}
+                    className="rounded border border-stone-200 bg-white px-2 text-xs text-stone-500 hover:bg-stone-100 hover:text-stone-700"
+                    title="Rename this corpus"
+                  >
+                    rename
                   </button>
                 </li>
               ))}
