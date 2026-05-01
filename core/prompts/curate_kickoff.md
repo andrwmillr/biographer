@@ -7,7 +7,7 @@ Start with a short orientation (3-5 sentences):
 - Pick out one observation about the list — a notable concentration, an obvious mergeable pair, a theme that looks thin. One sharp note, not a summary.
 - List the moves available: drop, merge, tighten a name or gloss, propose a new theme. Don't mention `/lock` — the user has a **Finalize** button in the UI for that.
 
-Then emit the `## Current state` block listing every round-1 theme with status `[kept]`. End with a single line: "Ready for your moves." Wait for the user's first input.
+End with a single line: "Ready for your moves." Wait for the user's first input.
 
 The user will:
 - Drop themes ("drop 8 and 9")

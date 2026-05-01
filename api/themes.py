@@ -91,9 +91,8 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
         "name, one-line gloss, era list, and 8-10 candidate notes. Use the "
         "OUTPUT FORMAT from the round-1 section. Stream as you go — don't "
         "summarize, don't wait.\n\n"
-        "**Then transition to curate mode:** emit a `## Current state` block "
-        'listing every theme you just proposed with status `[kept]`, then end '
-        'with the single line "Ready for your moves." Wait for the user.\n\n'
+        "**Then transition to curate mode:** end with the single line "
+        '"Ready for your moves." Wait for the user.\n\n'
         f"When the user signals lock, write themes to {run_dir_abs}/themes.md "
         "using the Write tool, in the LOCKING format from your system prompt. "
         "Don't list directories, don't read sibling files, don't browse "
