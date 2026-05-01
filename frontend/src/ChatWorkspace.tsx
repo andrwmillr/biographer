@@ -555,9 +555,17 @@ export function ChatWorkspace({
   function sendStop() {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      // Send stop and let the server close the WS after handling it.
+      // If we close ourselves, the close frame races the stop message
+      // and the server can see the disconnect first — treating it as a
+      // Tier 3 detach (session keeps running) rather than an explicit
+      // shutdown.
       ws.send(JSON.stringify({ type: "stop" }));
-      ws.close();
     }
+    // Clear runId regardless: even if the stop message gets dropped, we
+    // don't want the next mount-effect to auto-attach to the abandoned
+    // session. GC will reap it after 30 min.
+    setRunId(null);
     setWsStatus("done");
   }
 
