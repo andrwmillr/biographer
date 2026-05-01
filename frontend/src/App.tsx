@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { EraTab } from "./EraTab";
 import { HeaderMenu } from "./HeaderMenu";
@@ -12,6 +12,7 @@ import {
   setAuthToken,
   setSession,
 } from "./auth";
+import type { Era } from "./types";
 
 // Backend URL resolution: ?backend=... query param > VITE_BACKEND_URL build env > same-origin (vite dev proxy).
 const _backendOverride = new URLSearchParams(location.search).get("backend") ?? undefined;
@@ -19,6 +20,27 @@ const API_BASE = _backendOverride ?? import.meta.env.VITE_BACKEND_URL ?? "";
 const WS_BASE = API_BASE
   ? API_BASE.replace(/^http/, "ws")
   : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+
+const MODELS = ["opus-4.7", "opus-4.6", "sonnet-4.6"] as const;
+
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function formatYearMonth(ym: string | null | undefined): string {
+  if (!ym || ym === "9999-99") return "";
+  const [y, m] = ym.split("-").map(Number);
+  if (!y || !m || m < 1 || m > 12) return ym;
+  return `${MONTHS_SHORT[m - 1]} ${y}`;
+}
+
+function formatEraRange(start: string | null, end: string | null): string {
+  const s = formatYearMonth(start);
+  const e = formatYearMonth(end) || "present";
+  if (!s) return "";
+  return `${s} – ${e}`;
+}
 
 export default function App() {
   const [error, setError] = useState<string>("");
@@ -37,6 +59,42 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState<string>("");
   const [loginSent, setLoginSent] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>("");
+
+  // Workspace controls live in the global header now (model picker on the
+  // right; era picker centered when viewMode === "eras"). State is lifted
+  // here so it survives chapter remounts and so EraTab + ChatWorkspace
+  // share the same selection.
+  const [model, setModel] = useState<(typeof MODELS)[number]>("opus-4.7");
+  const [eras, setEras] = useState<Era[]>([]);
+  const [selectedEra, setSelectedEra] = useState<string | null>(null);
+
+  const reloadEras = useCallback(async () => {
+    if (!getSession()) return;
+    try {
+      const r = await fetch(`${API_BASE}/eras`, { headers: authHeaders() });
+      if (!r.ok) return;
+      const data = (await r.json()) as Era[];
+      setEras(data);
+      setSelectedEra((cur) => {
+        if (cur && data.some((e) => e.name === cur)) return cur;
+        const firstWithNotes = data.find((e) => e.note_count > 0);
+        return firstWithNotes?.name ?? data[0]?.name ?? null;
+      });
+    } catch {
+      // best-effort; the EraTab body will show its own error if it cares
+    }
+  }, []);
+
+  // Refetch eras when the corpus changes.
+  useEffect(() => {
+    if (corpusMode !== "ready" || !corpusInfo) {
+      setEras([]);
+      setSelectedEra(null);
+      return;
+    }
+    reloadEras();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corpusMode, corpusInfo?.slug]);
 
   // Refresh /auth/me to pick up newly-imported corpora and verify the token
   // is still valid. Returns the parsed user record or null on auth failure.
@@ -412,32 +470,67 @@ export default function App() {
         <div className="min-h-full">
           <header className="border-b border-stone-200 bg-white">
             <div className="mx-auto max-w-7xl px-6 py-4 flex items-center gap-4">
-              <h1 className="font-serif text-xl">Biographer</h1>
-              <div className="flex items-center gap-1 ml-2">
-                <button
-                  className={
-                    "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
-                    (viewMode === "eras"
-                      ? "text-stone-700 border-b-2 border-stone-700"
-                      : "text-stone-400 hover:text-stone-700")
-                  }
-                  onClick={() => setViewMode("eras")}
-                >
-                  Chapters
-                </button>
-                <button
-                  className={
-                    "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
-                    (viewMode === "themes"
-                      ? "text-stone-700 border-b-2 border-stone-700"
-                      : "text-stone-400 hover:text-stone-700")
-                  }
-                  onClick={() => setViewMode("themes")}
-                >
-                  Themes
-                </button>
+              <div className="flex flex-1 items-center gap-4 min-w-0">
+                <h1 className="font-serif text-xl shrink-0">Biographer</h1>
+                <div className="flex items-center gap-1 ml-2">
+                  <button
+                    className={
+                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                      (viewMode === "eras"
+                        ? "text-stone-700 border-b-2 border-stone-700"
+                        : "text-stone-400 hover:text-stone-700")
+                    }
+                    onClick={() => setViewMode("eras")}
+                  >
+                    Chapters
+                  </button>
+                  <button
+                    className={
+                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                      (viewMode === "themes"
+                        ? "text-stone-700 border-b-2 border-stone-700"
+                        : "text-stone-400 hover:text-stone-700")
+                    }
+                    onClick={() => setViewMode("themes")}
+                  >
+                    Themes
+                  </button>
+                </div>
               </div>
-              <div className="ml-auto flex items-center gap-3">
+              {viewMode === "eras" && eras.length > 0 && (
+                <select
+                  name="era"
+                  className="font-serif text-lg text-stone-900 bg-transparent border-0 border-b border-stone-200 hover:border-stone-400 focus:border-stone-600 focus:outline-none px-1 py-0.5"
+                  value={selectedEra ?? ""}
+                  onChange={(e) => setSelectedEra(e.target.value)}
+                  title="Select chapter"
+                >
+                  {eras.map((e) => {
+                    const range = formatEraRange(e.start, e.end);
+                    return (
+                      <option key={e.name} value={e.name} disabled={e.note_count === 0}>
+                        {e.name}
+                        {range ? ` (${range})` : ""}
+                        {e.note_count === 0 ? " (empty)" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              )}
+              <div className="flex flex-1 items-center justify-end gap-3 min-w-0">
+                <select
+                  name="model"
+                  className="rounded border border-stone-300 bg-white px-2 py-1 text-sm"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value as (typeof MODELS)[number])}
+                  title="Model used for new sessions"
+                >
+                  {MODELS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
                 {(corpusInfo.title || corpusInfo.slug) && (
                   <button
                     type="button"
@@ -476,16 +569,21 @@ export default function App() {
             </div>
           </header>
           {viewMode === "eras" ? (
-            <EraTab apiBase={API_BASE} wsBase={WS_BASE} />
+            <EraTab
+              apiBase={API_BASE}
+              wsBase={WS_BASE}
+              eras={eras}
+              selectedEra={selectedEra}
+              model={model}
+              onChapterFinalized={reloadEras}
+            />
           ) : (
             <ChatWorkspace
               key="themes"
               apiBase={API_BASE}
               wsBase={WS_BASE}
-              scope={{ kind: "themes", topN: 5 }}
-              titleNode={
-                <h2 className="font-serif text-lg text-stone-900">Themes</h2>
-              }
+              scope={{ kind: "themes" }}
+              model={model}
             />
           )}
         </div>

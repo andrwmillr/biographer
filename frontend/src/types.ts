@@ -37,10 +37,13 @@ export type LogItem =
 //   finalized  → draft locked + prompter disabled
 export type Phase = "pre-gen" | "generating" | "iterating" | "finalized";
 
-// Determines WS path + start payload + notes endpoint.
+// Determines WS path + start payload + notes endpoint. Drafting always
+// includes future-era hindsight context; themes always uses the top-5
+// folder-aware sample (the parameters that used to live in this scope
+// are now baked into the protocol).
 export type WorkspaceScope =
-  | { kind: "era"; era: string; future: boolean }
-  | { kind: "themes"; topN: number };
+  | { kind: "era"; era: string }
+  | { kind: "themes" };
 
 // Server-emitted spawned event. Common fields plus scope-specific extras.
 export type SpawnedInfo = {

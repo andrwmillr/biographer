@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   ImperativePanelGroupHandle,
   ImperativePanelHandle,
@@ -22,11 +22,13 @@ type ChatWorkspaceProps = {
   apiBase: string;
   wsBase: string;
   scope: WorkspaceScope;
+  // Model selected in the global header. Owned by App.tsx so it survives
+  // chapter remounts and is shared across views.
+  model: string;
   // Called when the server emits `finalized` — used by the eras tab to
-  // refetch the era list so the chapter checkmark updates.
+  // refetch the era list so chapter date ranges update after a draft is
+  // promoted.
   onFinalized?: (info: FinalizedInfo) => void;
-  // Title slot for the control bar — string or JSX (e.g. era selector).
-  titleNode?: ReactNode;
 };
 
 type WSStatus =
@@ -57,23 +59,20 @@ const PANE_DEFAULT_SIZE: Record<PaneId, number> = {
 // layout on later chapter loads.
 const DRAFT_AUTO_EXPANDED_KEY = "biographer-draft-auto-expanded";
 
-const MODELS = ["opus-4.7", "opus-4.6", "sonnet-4.6"] as const;
+// Defaults baked into the protocol — these used to be exposed as user-
+// adjustable controls in the now-removed control bar but never had a
+// real reason to vary per-session.
+const THEMES_TOP_N = 5;
+const ERA_INCLUDE_FUTURE = true;
 
 export function ChatWorkspace({
   apiBase,
   wsBase,
   scope,
+  model,
   onFinalized,
-  titleNode,
 }: ChatWorkspaceProps) {
   const [phase, setPhase] = useState<Phase>("pre-gen");
-  const [model, setModel] = useState<string>("opus-4.7");
-  const [future, setFuture] = useState<boolean>(
-    scope.kind === "era" ? scope.future : false,
-  );
-  const [topN, setTopN] = useState<number>(
-    scope.kind === "themes" ? scope.topN : 5,
-  );
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [notesLoading, setNotesLoading] = useState<boolean>(false);
@@ -261,8 +260,7 @@ export function ChatWorkspace({
   }, [apiBase, scope]);
 
   // ---- Notes fetch ----
-  // Re-runs when scope changes (which only happens via remount via key)
-  // or when topN changes (themes mode, pre-gen only — see input handler).
+  // Re-runs only when scope changes (which only happens via remount via key).
   useEffect(() => {
     let cancelled = false;
     setNotesLoading(true);
@@ -271,7 +269,7 @@ export function ChatWorkspace({
     const url =
       scope.kind === "era"
         ? `${apiBase}/notes?era=${encodeURIComponent(scope.era)}`
-        : `${apiBase}/notes/themes-top-n?n=${topN}`;
+        : `${apiBase}/notes/themes-top-n?n=${THEMES_TOP_N}`;
     fetch(url, { headers: authHeaders() })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
@@ -291,7 +289,7 @@ export function ChatWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [apiBase, scope, topN]);
+  }, [apiBase, scope]);
 
   // ---- Auto-scroll the chat log when new content arrives. ----
   useEffect(() => {
@@ -386,8 +384,8 @@ export function ChatWorkspace({
       // what's already in the run_dir.
       const startMsg =
         scope.kind === "era"
-          ? { ...base, era: scope.era, future }
-          : { ...base, top_n: topN };
+          ? { ...base, era: scope.era, future: ERA_INCLUDE_FUTURE }
+          : { ...base, top_n: THEMES_TOP_N };
       ws.send(JSON.stringify(startMsg));
       lastPongRef.current = Date.now();
       pingTimer = setInterval(() => {
@@ -429,7 +427,7 @@ export function ChatWorkspace({
               ((info.future_chapters ?? 0) > 0
                 ? ` + ${info.future_chapters} future chapter${info.future_chapters === 1 ? "" : "s"}`
                 : "")
-            : `reading top-${info.top_n ?? topN} per era`;
+            : `reading top-${info.top_n ?? THEMES_TOP_N} per era`;
         setLog((l) => [...l, { kind: "status", text: summary }]);
       } else if (t === "narration") {
         narrationBufRef.current += payload.text;
@@ -856,7 +854,34 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1.5">
+          {id === "draft" && sessionLive && (
+            <button
+              onClick={sendStop}
+              className="rounded border border-stone-300 bg-white px-2 py-0.5 text-[11px] text-stone-700 hover:bg-stone-100"
+              title="stop the agent"
+            >
+              Stop
+            </button>
+          )}
+          {id === "draft" && (
+            <button
+              onClick={sendFinalize}
+              disabled={!canFinalize}
+              className="rounded bg-emerald-700 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                phase === "finalized"
+                  ? "already finalized"
+                  : wsStatus !== "awaiting_reply"
+                    ? "wait for the agent"
+                    : scope.kind === "era" && !draft
+                      ? "no draft yet"
+                      : "lock the current draft to disk"
+              }
+            >
+              {phase === "finalized" ? "Finalized ✓" : "Finalize"}
+            </button>
+          )}
           <button
             onClick={() => setPopOut(popped ? null : id)}
             className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-stone-200 hover:text-stone-700"
@@ -901,92 +926,6 @@ export function ChatWorkspace({
 
   return (
     <div className="mx-auto max-w-[120rem] px-6 py-4">
-      {/* ---- Title / control bar ---- */}
-      <div className="mb-4 flex items-center gap-3 flex-wrap">
-        {titleNode}
-        <div className="ml-auto flex items-center gap-2 flex-wrap">
-          <select
-            name="model"
-            className="rounded border border-stone-300 bg-white px-2 py-1 text-sm disabled:text-stone-400"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={phase !== "pre-gen"}
-            title="Model used for this session"
-          >
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          {scope.kind === "era" && (
-            <label
-              className={
-                "flex items-center gap-1 text-xs " +
-                (phase === "pre-gen"
-                  ? "text-stone-600 cursor-pointer"
-                  : "text-stone-400")
-              }
-              title="Also feed any later eras' chapters & digests already on disk into this draft (hindsight context)."
-            >
-              <input
-                type="checkbox"
-                name="future"
-                checked={future}
-                onChange={(e) => setFuture(e.target.checked)}
-                disabled={phase !== "pre-gen"}
-                className="accent-stone-700"
-              />
-              future
-            </label>
-          )}
-          {scope.kind === "themes" && (
-            <label
-              className={
-                "flex items-center gap-1 text-xs " +
-                (phase === "pre-gen" ? "text-stone-600" : "text-stone-400")
-              }
-            >
-              top-n
-              <input
-                type="number"
-                name="top-n"
-                min={3}
-                max={20}
-                value={topN}
-                onChange={(e) => setTopN(parseInt(e.target.value) || 5)}
-                disabled={phase !== "pre-gen"}
-                className="w-12 rounded border border-stone-300 bg-white px-1 py-1 text-sm tabular-nums disabled:text-stone-400"
-              />
-            </label>
-          )}
-          {sessionLive && (
-            <button
-              className="rounded border border-stone-300 bg-white px-3 py-1 text-xs text-stone-700 hover:bg-stone-100"
-              onClick={sendStop}
-            >
-              Stop
-            </button>
-          )}
-          <button
-            className="rounded bg-emerald-700 px-3 py-1 text-xs text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed"
-            onClick={sendFinalize}
-            disabled={!canFinalize}
-            title={
-              phase === "finalized"
-                ? "already finalized"
-                : wsStatus !== "awaiting_reply"
-                  ? "wait for the agent"
-                  : scope.kind === "era" && !draft
-                    ? "no draft yet"
-                    : "lock the current draft to disk"
-            }
-          >
-            {phase === "finalized" ? "Finalized ✓" : "Finalize"}
-          </button>
-        </div>
-      </div>
-
       {error && (
         <div className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {error}
