@@ -61,9 +61,9 @@ def _prepare_themes_run(top_n: int = 7, corpus_id: str | None = None) -> dict:
     and OUT_DIR layout.
 
     Returns {run_dir, run_rel, full_user_msg, top_n, in_chars}."""
-    import spin_themes  # imported lazily; module-level OUT_DIR is unused here
+    from core.sampling import build_input
 
-    user_msg = spin_themes.build_input(top_n, corpus_id=corpus_id)
+    user_msg = build_input(top_n, corpus_id=corpus_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _themes_base(corpus_id) / f"run_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -109,7 +109,7 @@ def list_themes_top_n_notes(n: int = 7, session: str = Depends(require_corpus_ac
     """Folder-aware top-N sample fed to /themes-curate, flattened across
     eras and sorted chronologically. Same item shape as /notes?era=… so
     the UI can use one renderer. Default n=7 — 10 exceeds context."""
-    import spin_themes
+    from core.sampling import folder_aware_sample
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     _, by_era, eras = _load_state(corpus_id)
@@ -117,7 +117,7 @@ def list_themes_top_n_notes(n: int = 7, session: str = Depends(require_corpus_ac
     for era_name, _, _ in eras:
         era_notes = by_era.get(era_name, [])
         if era_notes:
-            sampled.extend(spin_themes.folder_aware_sample(era_notes, n, corpus_id))
+            sampled.extend(folder_aware_sample(era_notes, n, corpus_id))
     sampled.sort(key=lambda x: x.get("date", ""))
     out = []
     for note in sampled:
