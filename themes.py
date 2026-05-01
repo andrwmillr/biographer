@@ -46,7 +46,7 @@ from corpora import (
 )
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
-import write_biography as wb
+import corpus as wb
 
 router = APIRouter()
 

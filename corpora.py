@@ -19,7 +19,7 @@ from auth import _load_auth, get_auth_optional
 from config import ADMIN_EMAILS
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-import write_biography as wb
+import corpus as wb
 
 router = APIRouter()
 

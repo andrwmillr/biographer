@@ -10,7 +10,7 @@ Endpoints are split across routers in sibling modules:
   themes.py   — themes-curate flow (/themes-curate WS, /notes/themes-top-n)
 
 `config.py` (imported first, side effects only) loads `_scripts/.env` and
-inserts `_scripts/` onto sys.path before `import write_biography as wb`.
+inserts `_scripts/` onto sys.path before `import corpus as wb`.
 
 Run:
   uv run --with 'fastapi[standard]' --with anthropic --with pyyaml \\
@@ -18,7 +18,7 @@ Run:
 """
 from __future__ import annotations
 
-import config  # noqa: F401  — must precede `import write_biography`
+import config  # noqa: F401  — must precede `import corpus`
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

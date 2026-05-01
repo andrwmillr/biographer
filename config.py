@@ -8,7 +8,7 @@ REPO, MAX_UPLOAD_BYTES, ...`).
 
 Importing this module also has the side effect of (a) loading
 `_scripts/.env` into os.environ and (b) inserting `_scripts/` onto
-sys.path. This must run before `import write_biography as wb` from any
+sys.path. This must run before `import corpus as wb` from any
 module — keep `import config` (or `from config import ...`) at the top of
 every consumer.
 """

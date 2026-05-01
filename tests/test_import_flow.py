@@ -27,7 +27,7 @@ import auth  # noqa: E402
 import config  # noqa: E402
 import corpora  # noqa: E402
 import server  # noqa: E402
-import write_biography as wb  # noqa: E402
+import corpus as wb  # noqa: E402
 
 
 # ---- Test isolation: redirect both config.CORPORA_ROOT (server) AND

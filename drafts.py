@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-import write_biography as wb
+import corpus as wb
 
 router = APIRouter()
 
