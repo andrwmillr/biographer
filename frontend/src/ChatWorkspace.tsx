@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   ImperativePanelGroupHandle,
   ImperativePanelHandle,
@@ -199,14 +199,27 @@ export function ChatWorkspace({
 
   // visibilitychange doesn't fire on initial mount (the tab was already
   // visible when the page loaded), so a freshly-opened tab with a
-  // remembered run_id sits empty until the user tab-switches. Kick off
-  // the resume here so the second tab populates immediately. runId in
-  // localStorage is cleared on finalize, so this only fires for runs
-  // the user hasn't explicitly locked yet.
+  // remembered run_id sits empty until the user tab-switches. Auto-attach
+  // here ONLY when the server confirms the session is still in memory —
+  // we don't want to silently spin up a cold-resume SDK from a stale
+  // localStorage runId every time the page is opened.
   useEffect(() => {
     const runId = runIdRef.current;
     if (!runId) return;
-    startSession({ resumeRunId: runId });
+    let cancelled = false;
+    fetch(
+      `${apiBase}/session/active?run_id=${encodeURIComponent(runId)}`,
+      { headers: authHeaders() },
+    )
+      .then((r) => (r.ok ? r.json() : { active: false }))
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.active) startSession({ resumeRunId: runId });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

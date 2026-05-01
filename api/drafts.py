@@ -25,6 +25,7 @@ from api.corpora import (
     _session_corpus_id,
     corpus_dir,
     is_sample_corpus,
+    require_corpus_access,
     require_writable,
 )
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -35,6 +36,23 @@ from core import corpus as wb
 from core.session import Session, create_session, get_session
 
 router = APIRouter()
+
+
+@router.get("/session/active")
+def session_active(
+    run_id: str,
+    session: str = Depends(require_corpus_access),
+):
+    """Cheap liveness check used by the workspace mount effect to decide
+    whether to auto-resume. Returns active=True only if the session is in
+    the in-memory registry AND owned by the requesting corpus, so we
+    don't auto-spin-up a cold-resume SDK from a stale localStorage runId
+    every time the page is opened, and don't leak existence of another
+    corpus's session."""
+    sess = get_session(run_id)
+    if sess is None or sess.corpus_id != _session_corpus_id(session):
+        return {"active": False}
+    return {"active": True}
 
 
 class DraftRequest(BaseModel):
