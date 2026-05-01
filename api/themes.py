@@ -370,6 +370,12 @@ async def themes_curate(ws: WebSocket):
                     except WebSocketDisconnect:
                         break
                     mtype = msg.get("type")
+                    if mtype == "ping":
+                        # Keep-alive: client pings periodically so idle
+                        # tunnels (Cloudflare, browser App Nap, etc.)
+                        # don't reap the WS while the agent is silent.
+                        await send({"type": "pong"})
+                        continue
                     if mtype == "stop":
                         break
                     if mtype == "reply":

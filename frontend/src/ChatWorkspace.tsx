@@ -230,6 +230,11 @@ export function ChatWorkspace({
     const ws = new WebSocket(`${wsBase}${wsPath}`);
     wsRef.current = ws;
 
+    // Keep-alive: ping every 25s so the connection survives idle
+    // intermediate timeouts (Cloudflare tunnel, browser App Nap, etc.)
+    // when the agent is silently processing a long prompt.
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+
     ws.onopen = () => {
       const session = getSession() || "";
       const token = getAuthToken() || "";
@@ -238,6 +243,11 @@ export function ChatWorkspace({
           ? { type: "start", session, token, era: scope.era, future, model }
           : { type: "start", session, token, top_n: topN, model };
       ws.send(JSON.stringify(startMsg));
+      pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 25_000);
     };
 
     ws.onmessage = (ev) => {
@@ -248,6 +258,9 @@ export function ChatWorkspace({
         return;
       }
       const t = payload.type;
+      if (t === "pong") {
+        return; // keep-alive ack; nothing to render
+      }
       if (t === "spawned") {
         const info = payload as SpawnedInfo;
         setSpawned(info);
@@ -334,6 +347,10 @@ export function ChatWorkspace({
     };
 
     ws.onclose = () => {
+      if (pingTimer !== null) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
       flushNarration();
       setWsStatus((s) => (s === "done" || s === "error" ? s : "done"));
     };
