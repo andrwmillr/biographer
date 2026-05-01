@@ -8,6 +8,16 @@ from __future__ import annotations
 from core import corpus as wb
 
 
+# Total body-character budget for the themes round-1 input. Sampling first
+# does folder-aware top-N per era, then if the combined bodies exceed this
+# cap each note is proportionally shortened (head + tail kept, middle snipped
+# via wb.sample_keeper). Mirrors the cap pattern in build_user_msg but tuned
+# lower because themes runs read everything before emitting any output, so
+# inference time scales directly with input size.
+THEMES_CHAR_CAP = 250_000
+MIN_PER_NOTE = 400
+
+
 def folder_aware_sample(notes_in_era, top_n, corpus_id=None):
     """Per-era sample: top-N longest notes per discovered folder.
 
@@ -51,10 +61,26 @@ def build_input(top_n, corpus_id=None):
         if era:
             by_era.setdefault(era, []).append(n)
 
+    sampled_by_era: dict[str, list[dict]] = {}
+    for name, _, _ in eras:
+        era_notes = by_era.get(name, [])
+        if not era_notes:
+            continue
+        sampled_by_era[name] = folder_aware_sample(era_notes, top_n, corpus_id)
+
+    total_body = sum(len(n["body"]) for ns in sampled_by_era.values() for n in ns)
+    snipped = False
+    if total_body > THEMES_CHAR_CAP:
+        ratio = THEMES_CHAR_CAP / total_body
+        for ns in sampled_by_era.values():
+            for n in ns:
+                cap = max(MIN_PER_NOTE, int(len(n["body"]) * ratio))
+                n["body"] = wb.sample_keeper(n["body"], cap)
+        snipped = True
+
     lines = []
     lines.append("# Corpus overview")
     lines.append("")
-    lines.append(f"Subject: {wb.SUBJECT_NAME}")
     lines.append(f"Total notes: {len(notes)}")
     lines.append("")
     lines.append("## Eras")
@@ -71,16 +97,22 @@ def build_input(top_n, corpus_id=None):
     lines.append("")
     lines.append(
         f"You are seeing a sample of the corpus, not every note. Per era: "
-        f"the top-{top_n} longest journal entries + the top-{top_n} longest "
-        f"creative pieces + every poetry note + every letter. Short journal "
-        f"and creative notes outside this sample are not shown."
+        f"up to {top_n} longest notes per folder. Short notes outside this "
+        f"sample are not shown."
     )
+    if snipped:
+        lines.append("")
+        lines.append(
+            f"The combined sample exceeded {THEMES_CHAR_CAP:,} characters, so "
+            "each note's body was proportionally shortened — head and tail kept, "
+            "middle snipped (the snip is marked inline). Treat the head/tail as "
+            "representative of the full piece."
+        )
     lines.append("")
     for name, _, _ in eras:
-        era_notes = by_era.get(name, [])
-        if not era_notes:
+        sampled = sampled_by_era.get(name)
+        if not sampled:
             continue
-        sampled = folder_aware_sample(era_notes, top_n, corpus_id)
         lines.append(f"### {name} — {len(sampled)} sampled notes")
         lines.append("")
         for n in sampled:
