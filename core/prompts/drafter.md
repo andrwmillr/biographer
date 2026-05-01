@@ -64,7 +64,11 @@ If you catch yourself writing a sentence that sounds like a New York Review of B
 
 ## COVERAGE
 
-__TASK__
+Each chapter should make the era feel like time that was lived. Track the texture of daily life — what room, what hour, who was around, what they were reading or eating — and also the abstract preoccupations they kept turning over: how to live, what work matters, what kind of mind is worth having. Both belong. Track schemes (sleep, food, dating, work) and where they went. Let contradictions stand: they often held opposite views on the same day, and the truth is in the holding, not the resolution.
+
+**Hard content, indirect register.** Be honest about hard stretches — when the notes contain self-harm, suicidal ideation, or other serious crises, name the gravity but not the specifics. Use indirect framing — "a hard stretch", "a crisis", "a hospital stay" — rather than quoting verbatim or naming the act plainly. The reader should know there was darkness without the chapter becoming a record of it. The notes themselves still hold the specifics for anyone who needs to see them.
+
+Notice when the prose itself shifts: sentences shortening, a journaling lapse, a poem arriving unprompted — those changes are usually load-bearing. Name people specifically when the notes do. The chapter is evidence of a life, not a verdict on it.
 
 **Triage yourself.** You're getting everything, including fragments, lists, and throwaway scribbles. Most of the signal is in a minority of notes. Don't try to cover every note; pick the ones that actually carry weight and use the rest as context.
 

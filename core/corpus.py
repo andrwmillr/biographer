@@ -116,35 +116,10 @@ MODEL = _pick_model()
 
 
 # ---------------------------------------------------------------------------
-# Task variants + chapter system prompt
+# Chapter system prompt
 # ---------------------------------------------------------------------------
 
-TASK_VARIANTS = {
-    "paragraph": """Each chapter should make the era feel like time that was lived. Track the texture of daily life — what room, what hour, who was around, what he was reading or eating — and also the abstract preoccupations he kept turning over: how to live, what work matters, what kind of mind is worth having. Both belong. Track schemes (sleep, food, dating, work) and where they went. Let contradictions stand: he often held opposite views on the same day, and the truth is in the holding, not the resolution. Be honest about hard stretches — the corpus contains crises and a hospital stay; record what's there without smoothing or dramatizing. Notice when the prose itself shifts: sentences shortening, a journaling lapse, a poem arriving unprompted — those changes are usually load-bearing. Name people specifically when the notes do. The chapter is evidence of a life, not a verdict on it.""",
-
-    "bullets": """Write a chapter covering, for this era:
-- what was on his mind — preoccupations, what he kept coming back to, what shifted
-- what was actually happening — events, people, relationships, decisions, mental-health stretches
-- patterns and turning points — what recurs, what changes, what gets dropped""",
-}
-
-
-def _pick_task() -> str:
-    for i, arg in enumerate(sys.argv):
-        if arg == "--task" and i + 1 < len(sys.argv):
-            key = sys.argv[i + 1]
-            if key in TASK_VARIANTS:
-                return key
-            print(f"ERROR: unknown --task '{key}'. Choices: {', '.join(TASK_VARIANTS)}", file=sys.stderr)
-            sys.exit(1)
-    return "paragraph"
-
-
-TASK_VARIANT = _pick_task()
-
-
 CHAPTER_SYSTEM = (Path(__file__).parent / "prompts" / "drafter.md").read_text(encoding="utf-8")
-CHAPTER_SYSTEM = CHAPTER_SYSTEM.replace("__TASK__", TASK_VARIANTS[TASK_VARIANT])
 
 
 # ---------------------------------------------------------------------------

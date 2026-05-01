@@ -12,7 +12,6 @@ Output: _corpus/claude/biographies/biography_<stamp>.md plus a
 
 Flags:
   --model {opus-4.6,opus-4.7,sonnet-4.6} — pick model (default opus-4.7)
-  --task {paragraph,bullets}             — chapter framing (default paragraph)
   --future                               — also feed each draft any later eras'
                                             chapters/digests already on disk from
                                             a previous run (hindsight context).
@@ -50,8 +49,6 @@ from core.corpus import (
     MODEL,
     MODELS,
     SUBJECT_NAME,
-    TASK_VARIANT,
-    TASK_VARIANTS,
     apply_authorship,
     apply_date_overrides,
     apply_note_metadata,
@@ -427,7 +424,6 @@ async def main():
         sys.exit(1)
 
     log(f"model: {MODEL}")
-    log(f"task variant: {TASK_VARIANT}")
     log(f"future context: {'on' if INCLUDE_FUTURE else 'off'}")
     all_notes = load_corpus_notes()
     n_redated = apply_date_overrides(all_notes)
@@ -464,7 +460,7 @@ async def main():
     dirty = "-dirty" if _is_dirty() else ""
     snapshot_header = (
         f"<!-- prompt_sha: {sha}{dirty}  run: {RUN_STAMP}  "
-        f"model: {MODEL}  task: {TASK_VARIANT} -->\n\n"
+        f"model: {MODEL} -->\n\n"
     )
     BIOGRAPHIES_DIR.mkdir(parents=True, exist_ok=True)
     SYSTEM_SNAPSHOT.write_text(snapshot_header + CHAPTER_SYSTEM, encoding="utf-8")
