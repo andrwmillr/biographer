@@ -137,15 +137,43 @@ export function ChatWorkspace({
     return () => document.removeEventListener("keydown", onKey);
   }, [popOut]);
 
-  // Auto-expand draft on first content arrival. Latches via ref so a manual
-  // collapse later doesn't get fought by re-expansion.
+  // Auto-collapse-chat / expand-draft on first draft content arrival.
+  // Mirror image of the empty-draft default: when there's something to
+  // read, give it the room. Latches via ref so manual toggles later
+  // don't get fought by re-collapsing.
   useEffect(() => {
     if (!draft) return;
     if (draftAutoExpandedRef.current) return;
     draftAutoExpandedRef.current = true;
-    togglePaneCollapse("draft");
+    panelGroupRef.current?.setLayout([3, 48.5, 48.5]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
+
+  // On mount, fetch any locked output for this scope and seed the draft
+  // pane in read mode. Era → /chapters/<era>; themes → /themes/latest.
+  // Both 404 silently — no prior output is the common case.
+  useEffect(() => {
+    let cancelled = false;
+    const url =
+      scope.kind === "era"
+        ? `${apiBase}/chapters/${encodeURIComponent(scope.era)}`
+        : `${apiBase}/themes/latest`;
+    fetch(url, { headers: authHeaders() })
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<{ content: string }>;
+      })
+      .then((data) => {
+        if (cancelled || !data?.content) return;
+        setDraft(data.content);
+        setPhase("finalized");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBase, scope]);
 
   // ---- Notes fetch ----
   // Re-runs when scope changes (which only happens via remount via key)

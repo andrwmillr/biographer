@@ -104,6 +104,27 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
     )
 
 
+@router.get("/themes/latest")
+def get_latest_themes(session: str = Depends(require_corpus_access)):
+    """Return the locked themes.md from the most recent run that has
+    one. Used by the workspace to populate the draft pane in read mode
+    when the user re-enters the themes tab on a corpus with prior runs."""
+    corpus_id = _session_corpus_id(session)
+    base = _themes_base(corpus_id)
+    if not base.exists():
+        raise HTTPException(404, "no themes runs yet")
+    runs = sorted(
+        (p for p in base.iterdir() if p.is_dir() and p.name.startswith("run_")),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for run in runs:
+        themes = run / "themes.md"
+        if themes.exists():
+            return {"content": themes.read_text(encoding="utf-8")}
+    raise HTTPException(404, "no locked themes yet")
+
+
 @router.get("/notes/themes-top-n")
 def list_themes_top_n_notes(n: int = 5, session: str = Depends(require_corpus_access)):
     """Folder-aware top-N sample fed to /themes-curate, flattened across

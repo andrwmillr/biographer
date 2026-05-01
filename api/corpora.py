@@ -157,6 +157,18 @@ def list_eras(session: str = Depends(require_corpus_access)):
     return out
 
 
+@router.get("/chapters/{era}")
+def get_chapter(era: str, session: str = Depends(require_corpus_access)):
+    """Return the locked chapter for `era`, if one exists. Used by the
+    workspace to populate the draft pane in read mode."""
+    corpus_id = _session_corpus_id(session)
+    corpus_dir(session)
+    chapter_path = wb.chapters_dir(corpus_id) / f"{wb.era_slug(era)}.md"
+    if not chapter_path.exists():
+        raise HTTPException(404, f"no chapter for era: {era}")
+    return {"content": chapter_path.read_text(encoding="utf-8")}
+
+
 @router.get("/notes")
 def list_notes(era: str, session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
