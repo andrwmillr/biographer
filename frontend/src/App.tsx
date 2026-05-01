@@ -404,7 +404,6 @@ export default function App() {
                 <HeaderMenu
                   isSample={corpusInfo.is_sample}
                   userEmail={userEmail}
-                  hasMultipleCorpora={userCorpora.length > 1}
                   onWipe={async () => {
                     if (
                       !window.confirm(

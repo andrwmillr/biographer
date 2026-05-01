@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 type HeaderMenuProps = {
   isSample?: boolean;
   userEmail: string | null;
-  hasMultipleCorpora: boolean;
   onWipe: () => void;
   onSwitchCorpus: () => void;
   onLogout: () => void;
@@ -12,7 +11,6 @@ type HeaderMenuProps = {
 export function HeaderMenu({
   isSample = false,
   userEmail,
-  hasMultipleCorpora,
   onWipe,
   onSwitchCorpus,
   onLogout,
