@@ -1,7 +1,8 @@
 """Themes-curate flow.
 
-`GET /notes/themes-top-n` is an admin-gated read returning the
-folder-aware top-N corpus sample (input to the themes flow).
+`GET /notes/themes-top-n` returns the folder-aware top-N corpus sample
+(input to the themes flow). Auth mirrors `/notes?era=…`: samples are
+open, owned corpora require an X-Auth-Token.
 
 `WS /themes-curate` is single-phase: a ClaudeSDKClient session whose
 system prompt combines THEMES_R1.md + CURATE.md and whose kickoff
@@ -31,7 +32,6 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 from config import (
-    ADMIN_EMAILS,
     CURATE_PATH,
     REPO,
     THEMES_R1_PATH,
@@ -41,19 +41,21 @@ from corpora import (
     _note_source,
     _session_corpus_id,
     corpus_dir,
-    get_session,
-    require_admin,
+    is_sample_corpus,
+    require_corpus_access,
 )
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
 import write_biography as wb
 
 router = APIRouter()
 
-THEMES_BASE = wb.CORPUS / "claude" / "themes"
+
+def _themes_base(corpus_id: str | None = None) -> Path:
+    return wb.corpus_root(corpus_id) / "claude" / "themes"
 
 
-def _prepare_themes_run(top_n: int = 7) -> dict:
+def _prepare_themes_run(top_n: int = 7, corpus_id: str | None = None) -> dict:
     """Build the round-1 corpus-themes input message and create a fresh
     themes run dir on disk. Mirrors spin_themes.py's build_input(top_n)
     and OUT_DIR layout.
@@ -61,9 +63,9 @@ def _prepare_themes_run(top_n: int = 7) -> dict:
     Returns {run_dir, run_rel, full_user_msg, top_n, in_chars}."""
     import spin_themes  # imported lazily; module-level OUT_DIR is unused here
 
-    user_msg = spin_themes.build_input(top_n)
+    user_msg = spin_themes.build_input(top_n, corpus_id=corpus_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = THEMES_BASE / f"run_{timestamp}"
+    run_dir = _themes_base(corpus_id) / f"run_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "input.md").write_text(user_msg, encoding="utf-8")
     return {
@@ -102,8 +104,8 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str) -> str:
     )
 
 
-@router.get("/notes/themes-top-n", dependencies=[Depends(require_admin)])
-def list_themes_top_n_notes(n: int = 7, session: str = Depends(get_session)):
+@router.get("/notes/themes-top-n")
+def list_themes_top_n_notes(n: int = 7, session: str = Depends(require_corpus_access)):
     """Folder-aware top-N sample fed to /themes-curate, flattened across
     eras and sorted chronologically. Same item shape as /notes?era=… so
     the UI can use one renderer. Default n=7 — 10 exceeds context."""
@@ -148,16 +150,36 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
         except Exception:
             pass
 
-    state = _gc_auth(_load_auth())
-    record = state["sessions"].get(auth) if auth else None
-    email = record["email"] if record else None
-    if email is None or email not in ADMIN_EMAILS:
-        await send({"type": "error", "message": "themes curation is admin-only"})
+    async def reject(message: str):
+        await send({"type": "error", "message": message})
         try:
             await ws.close()
         except Exception:
             pass
+
+    if not session:
+        await reject("missing ?session= query param")
         return
+    try:
+        corpus_dir(session)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
+    # Auth gate mirrors /session: samples are open to anonymous visitors so
+    # the demo flow works without an account; non-samples require ownership.
+    if not is_sample_corpus(session):
+        if not auth:
+            await reject("auth required: missing ?auth= query param")
+            return
+        state = _gc_auth(_load_auth())
+        record = state["sessions"].get(auth)
+        if not record:
+            await reject("invalid or expired auth token")
+            return
+        if session not in state["users"].get(record["email"], []):
+            await reject("this corpus is not owned by the authenticated user")
+            return
+    corpus_id = _session_corpus_id(session)
 
     try:
         first = await ws.receive_json()
@@ -169,7 +191,7 @@ async def themes_curate(ws: WebSocket, session: str | None = None, auth: str | N
         model_key = first.get("model")
         model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
 
-        prep = _prepare_themes_run(top_n=top_n)
+        prep = _prepare_themes_run(top_n=top_n, corpus_id=corpus_id)
         run_dir = prep["run_dir"]
         run_rel = prep["run_rel"]
         full_user_msg = prep["full_user_msg"]
