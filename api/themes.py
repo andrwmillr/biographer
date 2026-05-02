@@ -107,12 +107,31 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
     )
 
 
+def _promote_themes(run_dir: Path, corpus_id: str | None) -> dict:
+    """Copy run_dir/themes.md → themes/canonical.md. Called on finalize.
+    Mirrors _promote_era_chapter: the canonical path is the only thing
+    the read endpoint (`/themes/latest`) ever serves."""
+    src = run_dir / "themes.md"
+    if not src.is_file():
+        raise ValueError(f"no themes.md in {run_dir}")
+    dst = _themes_base(corpus_id) / "canonical.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    overwritten = dst.exists()
+    content = src.read_text(encoding="utf-8")
+    dst.write_text(content, encoding="utf-8")
+    return {
+        "content": content,
+        "location": str(dst.relative_to(REPO)),
+        "words": len(content.split()),
+        "overwritten": overwritten,
+    }
+
+
 async def _themes_watch(session: Session) -> None:
     """Background loop: watch themes.md for changes, emit draft_update.
-    When finalize_pending is set and themes.md changes, emit finalized
-    and clear the flag."""
+    When finalize_pending is set and themes.md changes, promote to
+    canonical.md and emit finalized."""
     p = session.run_dir / "themes.md"
-    themes_relative = str(p.relative_to(REPO))
     last_m: float | None = None
     while True:
         await asyncio.sleep(0.5)
@@ -130,12 +149,13 @@ async def _themes_watch(session: Session) -> None:
         await session.emit({"type": "draft_update", "kind": "themes", "content": content})
         if session.finalize_pending:
             session.finalize_pending = False
+            result = _promote_themes(session.run_dir, session.corpus_id)
             await session.emit({
                 "type": "finalized",
-                "content": content,
-                "location": themes_relative,
-                "words": len(content.split()),
-                "overwritten": False,
+                "content": result["content"],
+                "location": result["location"],
+                "words": result["words"],
+                "overwritten": result["overwritten"],
             })
 
 
@@ -144,31 +164,14 @@ def get_latest_themes(session: str = Depends(require_corpus_access)):
     """Return the canonical themes.md for the corpus. Used by the
     workspace to populate the draft pane in read mode.
 
-    Sample corpora: read from a fixed canonical path (themes/canonical.md)
-    pre-populated when the sample is built. One visitor's /lock writes
-    to their session run dir but never overwrites this canonical view.
-
-    Owned corpora: read from the most recent run dir's themes.md, since
-    the owner's iteration is canonical by definition."""
+    Only serves formally promoted content — themes.md is copied to
+    canonical.md on finalize (mirrors how chapters promotes to a fixed
+    path). In-progress/unlocked run output never leaks here."""
     corpus_id = _session_corpus_id(session)
-    base = _themes_base(corpus_id)
-    if is_sample_corpus(session):
-        canonical = base / "canonical.md"
-        if not canonical.exists():
-            raise HTTPException(404, "no canonical themes for this sample yet")
-        return {"content": canonical.read_text(encoding="utf-8")}
-    if not base.exists():
-        raise HTTPException(404, "no themes runs yet")
-    runs = sorted(
-        (p for p in base.iterdir() if p.is_dir() and p.name.startswith("run_")),
-        key=lambda p: p.name,
-        reverse=True,
-    )
-    for run in runs:
-        themes = run / "themes.md"
-        if themes.exists():
-            return {"content": themes.read_text(encoding="utf-8")}
-    raise HTTPException(404, "no locked themes yet")
+    canonical = _themes_base(corpus_id) / "canonical.md"
+    if not canonical.exists():
+        raise HTTPException(404, "no locked themes yet")
+    return {"content": canonical.read_text(encoding="utf-8")}
 
 
 @router.get("/notes/themes-top-n")
