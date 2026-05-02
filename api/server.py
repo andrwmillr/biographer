@@ -58,7 +58,8 @@ async def lifespan(app: FastAPI):
             extra = {"era": sess.era} if sess.era else {}
             tlog("session_end", kind=sess.kind, email=sess.email,
                  corpus=sess.corpus_id, reason="shutdown",
-                 cost_usd=sess.cumulative_cost, **extra)
+                 cost_usd=sess.cumulative_cost,
+                 run_id=sess.run_id, **extra)
 
 
 app = FastAPI(lifespan=lifespan)

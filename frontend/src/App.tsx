@@ -45,6 +45,7 @@ function formatEraRange(start: string | null, end: string | null): string {
 
 export default function App() {
   const [error, setError] = useState<string>("");
+  const [magicLinkLanded, setMagicLinkLanded] = useState(false);
   const [viewMode, _setViewMode] = useState<"eras" | "themes">(() => {
     const stored = localStorage.getItem("viewMode");
     return stored === "eras" ? "eras" : "themes";
@@ -226,10 +227,15 @@ export default function App() {
   useEffect(() => {
     (async () => {
       // 1. Magic-link landing: pick up #auth=<token> and clean the URL.
+      //    Show a "you can close this tab" interstitial — the original tab
+      //    picks up the token via the storage event listener and transitions
+      //    automatically. The user can also click "continue here" to proceed.
       if (location.hash.startsWith("#auth=")) {
         const token = decodeURIComponent(location.hash.slice("#auth=".length));
         if (token) setAuthToken(token);
         history.replaceState(null, "", location.pathname + location.search);
+        setMagicLinkLanded(true);
+        return;
       }
 
       // Kick off samples fetch in the background — they're for any non-ready
@@ -275,6 +281,25 @@ export default function App() {
       setCorpusMode("error");
     });
   }, []);
+
+  // Cross-tab auth: when the magic link opens in a new tab, it writes
+  // authToken to localStorage. The `storage` event fires in THIS tab,
+  // so we can re-bootstrap without the user having to manually switch
+  // back and refresh.
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.key !== "authToken" || !e.newValue) return;
+      if (corpusMode !== "login") return;
+      // Re-run the same bootstrap logic as the mount effect.
+      (async () => {
+        const me = await refreshUser();
+        if (!me) return;
+        setCorpusMode(me.corpora.length === 0 ? "import" : "picker");
+      })().catch(() => {});
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [corpusMode]);
 
   async function handleRequestLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -469,6 +494,48 @@ export default function App() {
             </li>
           ))}
         </ul>
+      </div>
+    );
+  }
+
+  function continueHere() {
+    setMagicLinkLanded(false);
+    refreshSamples();
+    (async () => {
+      const slug = getSession();
+      if (slug) {
+        const r = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
+        if (r.ok) {
+          const info = (await r.json()) as CorpusInfo;
+          setCorpusInfo(info);
+          setCorpusMode(info.has_eras ? "ready" : "import");
+          refreshUser().catch(() => {});
+          return;
+        }
+        if (r.status === 401 || r.status === 403) clearSession();
+      }
+      const me = await refreshUser();
+      if (!me) { setCorpusMode("login"); return; }
+      setCorpusMode(me.corpora.length === 0 ? "import" : "picker");
+    })().catch(() => setCorpusMode("login"));
+  }
+
+  if (magicLinkLanded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
+        <div className="max-w-sm text-center p-8">
+          <h1 className="font-serif text-xl mb-3">Signed in</h1>
+          <p className="text-stone-600 text-sm mb-6 leading-relaxed">
+            You can close this tab and return to where you were — it's
+            already updated.
+          </p>
+          <button
+            onClick={continueHere}
+            className="text-sm text-stone-500 underline hover:text-stone-700"
+          >
+            Or continue here
+          </button>
+        </div>
       </div>
     );
   }

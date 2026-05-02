@@ -520,7 +520,8 @@ async def session(ws: WebSocket):
             tlog("session_start", kind="era", email=user_email,
                  corpus=corpus_id, era=era, model=model,
                  resumed=bool(resume_run_rel),
-                 notes=inputs["notes_count"])
+                 notes=inputs["notes_count"],
+                 run_id=inputs["run_rel"])
             await sess.attach(ws)
 
         # Receive loop. Session owns the SDK.
@@ -536,7 +537,8 @@ async def session(ws: WebSocket):
             if mtype == "stop":
                 tlog("session_end", kind="era", email=user_email,
                      corpus=corpus_id, era=era, reason="stop",
-                     cost_usd=sess.cumulative_cost)
+                     cost_usd=sess.cumulative_cost,
+                     run_id=sess.run_id)
                 await sess.stop()
                 break
             if mtype == "reply":
@@ -580,7 +582,8 @@ async def session(ws: WebSocket):
                 tlog("session_end", kind="era", email=user_email,
                      corpus=corpus_id, era=era, reason="finalized",
                      cost_usd=sess.cumulative_cost,
-                     words=promoted["words"])
+                     words=promoted["words"],
+                     run_id=sess.run_id)
     except WebSocketDisconnect:
         pass
     except Exception as e:

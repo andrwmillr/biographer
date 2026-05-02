@@ -431,7 +431,10 @@ export function ChatWorkspace({
         const info = payload as SpawnedInfo;
         setSpawned(info);
         // Persist run_dir for resume on reconnect.
-        if (info.run_dir) setRunId(info.run_dir);
+        if (info.run_dir) {
+          setRunId(info.run_dir);
+          console.info(`[biographer] session: ${info.run_dir}`);
+        }
         const summary =
           scope.kind === "era"
             ? `reading ${info.notes ?? 0} notes` +
@@ -625,13 +628,15 @@ export function ChatWorkspace({
     wsStatus === "connecting" ||
     wsStatus === "generating" ||
     wsStatus === "awaiting_reply";
-  // Era flow needs a draft on disk (output.md) before lock — Finalize
-  // promotes that file to chapters/. Themes writes themes.md only on
-  // /lock itself, so there's no pre-lock draft to require.
+  // Enable finalize only when the draft pane shows new content that
+  // differs from the canonical version. Both workflows now write a
+  // preliminary draft during generation (eras → output.md, themes →
+  // themes.md after round-1), so this check is uniform.
   const canFinalize =
     phase === "iterating" &&
     wsStatus === "awaiting_reply" &&
-    (scope.kind === "themes" || !!draft);
+    !!draft &&
+    draft !== canonicalDraft;
 
   const promptStatus: "pre-gen" | "generating" | "awaiting_reply" | "finalized" =
     phase === "finalized"
@@ -960,11 +965,11 @@ export function ChatWorkspace({
           {id === "chat" && sessionLive && (
             <button
               onClick={sendStop}
-              className="rounded px-1.5 py-0.5 text-stone-400 hover:bg-red-50 hover:text-red-600"
+              className="rounded px-1.5 py-0.5 text-red-400 hover:bg-red-50 hover:text-red-600"
               title="stop Claude session"
               aria-label="stop Claude session"
             >
-              ×
+              <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-2.5 h-2.5"><rect x="0.75" y="0.75" width="8.5" height="8.5" rx="1" /></svg>
             </button>
           )}
           {id === "draft" && (

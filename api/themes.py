@@ -367,7 +367,8 @@ async def themes_curate(ws: WebSocket):
             )
             tlog("session_start", kind="themes", email=user_email,
                  corpus=corpus_id, model=model,
-                 resumed=bool(resume_run_rel))
+                 resumed=bool(resume_run_rel),
+                 run_id=run_rel)
             await session.attach(ws)
 
         # Receive loop. Session owns the SDK; this loop just relays
@@ -385,7 +386,8 @@ async def themes_curate(ws: WebSocket):
             if mtype == "stop":
                 tlog("session_end", kind="themes", email=user_email,
                      corpus=corpus_id, reason="stop",
-                     cost_usd=session.cumulative_cost)
+                     cost_usd=session.cumulative_cost,
+                     run_id=session.run_id)
                 await session.stop()
                 break
             if mtype == "reply":
@@ -396,7 +398,8 @@ async def themes_curate(ws: WebSocket):
                 session.finalize_pending = True
                 tlog("session_end", kind="themes", email=user_email,
                      corpus=corpus_id, reason="finalized",
-                     cost_usd=session.cumulative_cost)
+                     cost_usd=session.cumulative_cost,
+                     run_id=session.run_id)
                 await session.query("/lock")
     except WebSocketDisconnect:
         pass
