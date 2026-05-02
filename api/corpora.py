@@ -17,10 +17,11 @@ from api import config
 import yaml
 from api.auth import _load_auth, get_auth_optional
 from api.config import ADMIN_EMAILS
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from core import corpus as wb
+from core.telemetry import log as tlog
 
 router = APIRouter()
 
@@ -248,10 +249,12 @@ def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)
 
 
 @router.get("/samples")
-def list_samples():
+def list_samples(request: Request):
     """List all sample corpora (any `_corpora/<slug>/_meta.json` with
     `"sample": true`). Open without auth — visitors can pick a sample
     slug to set as their corpusSession and browse it read-only."""
+    ip = request.headers.get("cf-connecting-ip") or request.client.host
+    tlog("page_view", page="samples", ip=ip)
     out = []
     if not config.CORPORA_ROOT.exists():
         return out
