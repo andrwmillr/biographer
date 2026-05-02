@@ -64,6 +64,9 @@ ADMIN_EMAILS = {
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB raw zip
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024   # 500 MB uncompressed (zip-bomb defense)
 
+# Telemetry — append-only JSONL log.
+TELEMETRY_PATH = REPO / "_telemetry" / "events.jsonl"
+
 # Prompt files used by drafts + themes flows.
 KICKOFF_PATH = PROMPTS_DIR / "kickoff.md"
 THEMES_R1_PATH = PROMPTS_DIR / "themes_r1.md"

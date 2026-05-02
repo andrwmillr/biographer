@@ -150,6 +150,7 @@ class Session:
                     await self.drain_task
                 except Exception:
                     pass
+            await self.emit({"type": "user_message", "text": text})
             await self.client.query(text)
             self.drain_task = asyncio.create_task(self._drain_turn())
 

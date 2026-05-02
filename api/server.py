@@ -34,7 +34,7 @@ from api import config  # noqa: F401, E402  — must precede other api/core impo
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from api import auth, corpora, drafts, imports, themes  # noqa: E402
+from api import auth, chapters, corpora, drafts, imports, themes  # noqa: E402
 from core.session import gc_loop  # noqa: E402
 
 
@@ -66,5 +66,6 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(corpora.router)
 app.include_router(imports.router)
+app.include_router(chapters.router)
 app.include_router(drafts.router)
 app.include_router(themes.router)

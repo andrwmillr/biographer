@@ -43,6 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 
 from core import corpus as wb
 from core.session import Session, create_session, get_session
+from core.telemetry import log as tlog
 
 router = APIRouter()
 
@@ -248,6 +249,7 @@ async def themes_curate(ws: WebSocket):
             await reject("this corpus is not owned by the authenticated user")
             return
     corpus_id = _session_corpus_id(session_slug)
+    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
 
     session: Session | None = None
     try:
@@ -320,7 +322,7 @@ async def themes_curate(ws: WebSocket):
                 model=model,
                 system_prompt=combined_system,
                 permission_mode="acceptEdits",
-                allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
+                allowed_tools=["Read", "Edit", "Write"],
                 settings=str(settings_path),
                 cwd=str(run_dir_abs),
                 include_partial_messages=True,
@@ -359,6 +361,9 @@ async def themes_curate(ws: WebSocket):
                 on_turn_complete=on_turn_complete,
                 background_loop=_themes_watch,
             )
+            tlog("session_start", kind="themes", email=user_email,
+                 corpus=corpus_id, model=model,
+                 resumed=bool(resume_run_rel))
             await session.attach(ws)
 
         # Receive loop. Session owns the SDK; this loop just relays
@@ -374,6 +379,9 @@ async def themes_curate(ws: WebSocket):
                 await send({"type": "pong"})
                 continue
             if mtype == "stop":
+                tlog("session_end", kind="themes", email=user_email,
+                     corpus=corpus_id, reason="stop",
+                     cost_usd=session.cumulative_cost)
                 await session.stop()
                 break
             if mtype == "reply":
@@ -382,6 +390,9 @@ async def themes_curate(ws: WebSocket):
                     await session.query(text)
             elif mtype == "finalize":
                 session.finalize_pending = True
+                tlog("session_end", kind="themes", email=user_email,
+                     corpus=corpus_id, reason="finalized",
+                     cost_usd=session.cumulative_cost)
                 await session.query("/lock")
     except WebSocketDisconnect:
         pass

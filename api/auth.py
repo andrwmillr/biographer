@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from api import config
 from api.config import ALLOWED_ORIGINS, AUTH_TOKEN_TTL, EMAIL_RE, MAGIC_TOKEN_TTL
+from core.telemetry import log as tlog
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -166,7 +167,7 @@ def auth_request(req: AuthRequestBody):
 @router.get("/auth/verify")
 def auth_verify(token: str):
     state = _gc_auth(_load_auth())
-    record = state["pending"].pop(token, None)
+    record = state["pending"].get(token)
     if not record:
         raise HTTPException(400, "invalid or expired token")
     email = record["email"]
@@ -178,6 +179,7 @@ def auth_verify(token: str):
     }
     state["users"].setdefault(email, [])
     _save_auth(state)
+    tlog("auth_login", email=email)
     return RedirectResponse(f"{return_url}#auth={auth_token}", status_code=302)
 
 

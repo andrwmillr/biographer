@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from core import corpus as wb
 from core.session import Session, create_session, get_session
+from core.telemetry import log as tlog
 
 router = APIRouter()
 
@@ -112,6 +113,13 @@ def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool 
         for d in future_digest_blocks:
             parts.append(d + "\n\n")
         parts.append("--- END FUTURE THREAD DIGESTS ---\n\n")
+    themes_text = wb.load_canonical_themes(corpus_id)
+    if themes_text:
+        parts.append(
+            "--- CORPUS THEMES (locked corpus-level themes — anchor against these for continuity; the era may also surface threads not listed here) ---\n\n"
+        )
+        parts.append(themes_text.rstrip("\n") + "\n\n")
+        parts.append("--- END CORPUS THEMES ---\n\n")
     parts.append(era_msg)
     full_user_msg = "".join(parts)
 
@@ -164,6 +172,11 @@ def _promote_era_chapter(run_dir: Path, era_name: str, corpus_id: str) -> dict:
     overwritten = dst.exists()
     content = src.read_text(encoding="utf-8")
     dst.write_text(content, encoding="utf-8")
+    digest_src = rd / "threads.md"
+    if digest_src.is_file():
+        digest_dst = wb.threads_dir(corpus_id) / f"{slug}.md"
+        digest_dst.parent.mkdir(parents=True, exist_ok=True)
+        digest_dst.write_text(digest_src.read_text(encoding="utf-8"), encoding="utf-8")
     return {
         "content": content,
         "location": str(dst.relative_to(REPO)),
@@ -397,6 +410,7 @@ async def session(ws: WebSocket):
             await reject("this corpus is not owned by the authenticated user")
             return
     corpus_id = _session_corpus_id(session_slug)
+    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
 
     sess: Session | None = None
     era = first["era"]
@@ -501,6 +515,10 @@ async def session(ws: WebSocket):
                 spawned_event=spawned_event,
                 background_loop=_era_watch,
             )
+            tlog("session_start", kind="era", email=user_email,
+                 corpus=corpus_id, era=era, model=model,
+                 resumed=bool(resume_run_rel),
+                 notes=inputs["notes_count"])
             await sess.attach(ws)
 
         # Receive loop. Session owns the SDK.
@@ -514,6 +532,9 @@ async def session(ws: WebSocket):
                 await send({"type": "pong"})
                 continue
             if mtype == "stop":
+                tlog("session_end", kind="era", email=user_email,
+                     corpus=corpus_id, era=era, reason="stop",
+                     cost_usd=sess.cumulative_cost)
                 await sess.stop()
                 break
             if mtype == "reply":
@@ -554,6 +575,10 @@ async def session(ws: WebSocket):
                     "words": promoted["words"],
                     "overwritten": promoted["overwritten"],
                 })
+                tlog("session_end", kind="era", email=user_email,
+                     corpus=corpus_id, era=era, reason="finalized",
+                     cost_usd=sess.cumulative_cost,
+                     words=promoted["words"])
     except WebSocketDisconnect:
         pass
     except Exception as e:

@@ -87,6 +87,26 @@ def threads_dir(corpus_id=None):
     return _corpus_paths(corpus_id)["threads"]
 
 
+def load_canonical_themes(corpus_id=None):
+    """Load the locked corpus-level themes, if any exist."""
+    base = corpus_root(corpus_id) / "claude" / "themes"
+    if not base.exists():
+        return ""
+    canonical = base / "canonical.md"
+    if canonical.exists():
+        return canonical.read_text(encoding="utf-8")
+    runs = sorted(
+        (p for p in base.iterdir() if p.is_dir() and p.name.startswith("run_")),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for run in runs:
+        themes = run / "themes.md"
+        if themes.exists():
+            return themes.read_text(encoding="utf-8")
+    return ""
+
+
 def biographies_dir(corpus_id=None):
     return _corpus_paths(corpus_id)["biographies"]
 

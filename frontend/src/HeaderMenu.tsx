@@ -6,6 +6,7 @@ type HeaderMenuProps = {
   onWipe: () => void;
   onLogout: () => void;
   onDeleteAccount: () => void;
+  onEditChapters?: () => void;
 };
 
 export function HeaderMenu({
@@ -14,6 +15,7 @@ export function HeaderMenu({
   onWipe,
   onLogout,
   onDeleteAccount,
+  onEditChapters,
 }: HeaderMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -66,6 +68,18 @@ export function HeaderMenu({
             <div className="truncate px-3 py-1 font-mono text-[10px] text-stone-400">
               {userEmail}
             </div>
+          )}
+          {onEditChapters && !isSample && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                onEditChapters();
+              }}
+              className="block w-full px-3 py-1.5 text-left text-xs text-stone-700 hover:bg-stone-50"
+              role="menuitem"
+            >
+              Edit chapters
+            </button>
           )}
           {showLogout && (
             <button
