@@ -42,13 +42,18 @@ router = APIRouter()
 @router.get("/session/active")
 def session_active(
     kind: str,
+    era: str | None = None,
     session: str = Depends(require_corpus_access),
 ):
     """Check if there's a live in-memory session for this corpus + kind.
-    Returns the run_id so the client can reconnect without storing it."""
+    For era-scoped sessions, also matches on era so switching chapters
+    doesn't resume the wrong session. Returns the run_id so the client
+    can reconnect without storing it."""
     corpus_id = _session_corpus_id(session)
     for sess in all_sessions():
         if sess.corpus_id == corpus_id and sess.kind == kind:
+            if era and sess.era != era:
+                continue
             return {"active": True, "run_id": sess.run_id}
     return {"active": False, "run_id": None}
 

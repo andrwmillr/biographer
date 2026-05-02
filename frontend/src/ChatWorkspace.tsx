@@ -169,8 +169,10 @@ export function ChatWorkspace({
   function checkAndResume() {
     const ws = wsRef.current;
     if (ws && ws.readyState <= WebSocket.OPEN) return; // already connected
+    const params = new URLSearchParams({ kind: scope.kind });
+    if (scope.kind === "era") params.set("era", scope.era);
     fetch(
-      `${apiBase}/session/active?kind=${scope.kind}`,
+      `${apiBase}/session/active?${params}`,
       { headers: authHeaders() },
     )
       .then((r) => (r.ok ? r.json() : { active: false }))
