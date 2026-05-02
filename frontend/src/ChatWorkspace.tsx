@@ -58,11 +58,6 @@ const PANE_DEFAULT_SIZE: Record<PaneId, number> = {
   draft: 3,
   notes: 48.5,
 };
-// One-shot flag: the auto-expand-draft-on-first-content effect sets this
-// the first time it fires, so it doesn't override the user's saved
-// layout on later chapter loads.
-const DRAFT_AUTO_EXPANDED_KEY = "biographer-draft-auto-expanded";
-
 // Defaults baked into the protocol — these used to be exposed as user-
 // adjustable controls in the now-removed control bar but never had a
 // real reason to vary per-session.
@@ -234,23 +229,16 @@ export function ChatWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-expand draft on first draft content arrival — but only the
-  // very first time the workspace has ever shown a draft on this device.
-  // The flag below latches in localStorage; subsequent mounts let the
-  // PanelGroup's autoSaveId restore whatever the user has chosen instead
-  // of overriding it every time a chapter loads.
+  // Auto-expand draft pane on first draft content each session. The ref
+  // latches after the first expansion so subsequent draft_update messages
+  // don't override the user's manual layout adjustments mid-session.
   useEffect(() => {
     if (!draft) return;
     if (draftAutoExpandedRef.current) return;
-    if (localStorage.getItem(DRAFT_AUTO_EXPANDED_KEY)) {
-      draftAutoExpandedRef.current = true;
-      return;
-    }
     draftAutoExpandedRef.current = true;
-    try {
-      localStorage.setItem(DRAFT_AUTO_EXPANDED_KEY, "1");
-    } catch {}
-    panelGroupRef.current?.setLayout([3, 48.5, 48.5]);
+    if (collapsed.draft) {
+      panelGroupRef.current?.setLayout([33, 34, 33]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
 
@@ -290,7 +278,7 @@ export function ChatWorkspace({
     const url =
       scope.kind === "era"
         ? `${apiBase}/notes?era=${encodeURIComponent(scope.era)}`
-        : `${apiBase}/notes/themes-top-n?n=${THEMES_TOP_N}`;
+        : `${apiBase}/notes/all?top_n=${THEMES_TOP_N}`;
     fetch(url, { headers: authHeaders() })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
@@ -521,13 +509,18 @@ export function ChatWorkspace({
         // Locked — no point resuming this run after disconnect.
         setRunId(null);
         if (onFinalized) onFinalized(info);
+      } else if (t === "user_message") {
+        flushNarration();
+        setLog((l) => [...l, { kind: "user", text: payload.text }]);
       } else if (t === "done") {
         flushNarration();
         setWsStatus("done");
+        setRunId(null);
         if (typeof payload.cost_usd === "number") setCost(payload.cost_usd);
       } else if (t === "error") {
         setError(payload.message ?? "unknown error");
         setWsStatus("error");
+        setRunId(null);
       }
     };
 
@@ -670,8 +663,8 @@ export function ChatWorkspace({
     const placeholder =
       promptStatus === "pre-gen"
         ? scope.kind === "era"
-          ? "Press ▶ to start drafting this chapter. The agent reads notes, drafts, then opens the chat."
-          : "Press ▶ to surface top recurring threads. The agent reads notes, sketches candidates, then opens the chat."
+          ? "Press ▶ to start drafting this chapter. The agent reads notes then proposes ideas for you to respond to."
+          : "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
         : promptStatus === "generating"
           ? "thinking…"
           : promptStatus === "finalized"
@@ -929,7 +922,7 @@ export function ChatWorkspace({
           {PANE_TITLES[id]}
           {id === "draft" && displayedDraft && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
-              ({displayedDraft.length.toLocaleString()} ch)
+              ({displayedDraft.split(/\s+/).filter(Boolean).length.toLocaleString()} words)
             </span>
           )}
           {id === "notes" && notes.length > 0 && (
@@ -1041,7 +1034,7 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="mx-auto max-w-[120rem] px-6 py-4 flex-1 flex flex-col min-h-0">
+    <div className="mx-auto w-full max-w-[120rem] px-6 py-4 flex-1 flex flex-col min-h-0">
       {error && (
         <div className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {error}

@@ -6,6 +6,7 @@ export type Note = {
   source: string;
   body: string;
   editor_note?: string;
+  sampled?: boolean;
 };
 
 export type Era = {

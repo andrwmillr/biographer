@@ -204,6 +204,49 @@ def list_notes(era: str, session: str = Depends(require_corpus_access)):
     return out
 
 
+@router.get("/notes/all")
+def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)):
+    """Return every note across all eras, sorted chronologically.
+    Each note includes `sampled: true` when it falls in the folder-aware
+    top-N selection used by the themes flow — so the UI can highlight
+    which notes the agent actually reads."""
+    from core.sampling import folder_aware_sample
+    corpus_id = _session_corpus_id(session)
+    corpus_dir(session)
+    _, by_era, eras = _load_state(corpus_id)
+
+    # Build the set of sampled rels (mirrors themes.py's selection)
+    sampled_rels: set[str] = set()
+    for era_name, _, _ in eras:
+        era_notes = by_era.get(era_name, [])
+        if era_notes:
+            for n in folder_aware_sample(era_notes, top_n, corpus_id):
+                sampled_rels.add(n["rel"])
+
+    # Flatten all eras, chronological
+    all_notes = []
+    for era_name, _, _ in eras:
+        all_notes.extend(by_era.get(era_name, []))
+    all_notes.sort(key=lambda n: n.get("date", ""))
+
+    out = []
+    for n in all_notes:
+        rel = n["rel"]
+        item = {
+            "rel": rel,
+            "date": n.get("date", ""),
+            "title": n.get("title", ""),
+            "label": rel.split("/", 1)[0] if "/" in rel else "",
+            "source": _note_source(rel, corpus_id),
+            "body": wb.parse_note_body(rel, corpus_id),
+            "sampled": rel in sampled_rels,
+        }
+        if n.get("editor_note"):
+            item["editor_note"] = n["editor_note"]
+        out.append(item)
+    return out
+
+
 @router.get("/samples")
 def list_samples():
     """List all sample corpora (any `_corpora/<slug>/_meta.json` with

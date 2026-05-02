@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChapterEditor, type ChapterDraft } from "./ChapterEditor";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { EraTab } from "./EraTab";
 import { HeaderMenu } from "./HeaderMenu";
@@ -44,7 +45,14 @@ function formatEraRange(start: string | null, end: string | null): string {
 
 export default function App() {
   const [error, setError] = useState<string>("");
-  const [viewMode, setViewMode] = useState<"eras" | "themes">("eras");
+  const [viewMode, _setViewMode] = useState<"eras" | "themes">(() => {
+    const stored = localStorage.getItem("viewMode");
+    return stored === "eras" ? "eras" : "themes";
+  });
+  const setViewMode = (v: "eras" | "themes") => {
+    _setViewMode(v);
+    localStorage.setItem("viewMode", v);
+  };
 
   // ---- Auth + corpus routing ----
   // Modes: loading (bootstrap) → login (no auth) → picker (pick corpus) →
@@ -66,11 +74,34 @@ export default function App() {
   // right; the "Chapters" tab doubles as the era selector dropdown when
   // active). State is lifted here so it survives chapter remounts and so
   // EraTab + ChatWorkspace share the same selection.
-  const [model, setModel] = useState<(typeof MODELS)[number]>("opus-4.7");
+  const [model, _setModel] = useState<(typeof MODELS)[number]>(() => {
+    const stored = localStorage.getItem("model");
+    return MODELS.includes(stored as any) ? (stored as (typeof MODELS)[number]) : "opus-4.7";
+  });
+  const setModel = (v: (typeof MODELS)[number]) => {
+    _setModel(v);
+    localStorage.setItem("model", v);
+  };
   const [eras, setEras] = useState<Era[]>([]);
-  const [selectedEra, setSelectedEra] = useState<string | null>(null);
+  const [selectedEra, _setSelectedEra] = useState<string | null>(() => {
+    const slug = getSession();
+    return slug
+      ? localStorage.getItem(`selectedEra_${slug}`)
+      : null;
+  });
+  const setSelectedEra = (v: string | null | ((prev: string | null) => string | null)) => {
+    _setSelectedEra((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      const slug = getSession();
+      if (slug && next) localStorage.setItem(`selectedEra_${slug}`, next);
+      return next;
+    });
+  };
   const [chaptersOpen, setChaptersOpen] = useState<boolean>(false);
   const chaptersMenuRef = useRef<HTMLDivElement | null>(null);
+  const [chapterEditorOpen, setChapterEditorOpen] = useState(false);
+  const [chapterEditorMonths, setChapterEditorMonths] = useState<string[]>([]);
+  const [chapterEditorSaving, setChapterEditorSaving] = useState(false);
 
   // Close the chapters dropdown on outside click / Escape.
   useEffect(() => {
@@ -336,6 +367,43 @@ export default function App() {
     }
   }
 
+  async function openChapterEditor() {
+    // Fetch note months for client-side count recomputation
+    try {
+      const r = await fetch(`${API_BASE}/chapters/note-months`, {
+        headers: authHeaders(),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setChapterEditorMonths(data.months);
+      }
+    } catch {}
+    setChapterEditorOpen(true);
+  }
+
+  async function handleChapterEditorConfirm(chapters: ChapterDraft[]) {
+    setChapterEditorSaving(true);
+    try {
+      const r = await fetch(`${API_BASE}/chapters/save`, {
+        method: "PUT",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chapters: chapters.map((ch) => ({
+            name: ch.name,
+            start: ch.start,
+          })),
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      setChapterEditorOpen(false);
+      await reloadEras();
+    } catch (err) {
+      setError(`save chapters failed: ${(err as Error).message}`);
+    } finally {
+      setChapterEditorSaving(false);
+    }
+  }
+
   // Irreversible: wipes every owned corpus + the user's auth record.
   // Two-prompt confirmation (warning + email re-entry) to make
   // misclicks unlikely.
@@ -500,18 +568,9 @@ export default function App() {
                     onClick={() => handlePickCorpus(slug)}
                     className="block w-full text-left px-4 py-3"
                   >
-                    {title ? (
-                      <>
-                        <span className="block text-sm text-stone-900">
-                          {title}
-                        </span>
-                        <span className="block font-mono text-[10px] text-stone-400">
-                          {slug}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-sm font-mono">{slug}</span>
-                    )}
+                    <span className="block text-sm text-stone-900">
+                      {title || slug}
+                    </span>
                   </button>
                   <button
                     onClick={(e) => {
@@ -601,6 +660,17 @@ export default function App() {
               <div className="flex flex-1 items-center gap-4 min-w-0">
                 <h1 className="font-serif text-xl shrink-0">Biographer</h1>
                 <div className="flex items-center gap-1 ml-2">
+                  <button
+                    className={
+                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                      (viewMode === "themes"
+                        ? "text-stone-700 border-b-2 border-stone-700"
+                        : "text-stone-400 hover:text-stone-700")
+                    }
+                    onClick={() => setViewMode("themes")}
+                  >
+                    Themes
+                  </button>
                   <div className="relative" ref={chaptersMenuRef}>
                     <button
                       className={
@@ -668,17 +738,6 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <button
-                    className={
-                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
-                      (viewMode === "themes"
-                        ? "text-stone-700 border-b-2 border-stone-700"
-                        : "text-stone-400 hover:text-stone-700")
-                    }
-                    onClick={() => setViewMode("themes")}
-                  >
-                    Themes
-                  </button>
                 </div>
               </div>
               {(corpusInfo.title || corpusInfo.slug) && (
@@ -734,6 +793,7 @@ export default function App() {
                   }}
                   onLogout={handleLogout}
                   onDeleteAccount={handleDeleteAccount}
+                  onEditChapters={openChapterEditor}
                 />
               </div>
             </div>
@@ -755,6 +815,29 @@ export default function App() {
               scope={{ kind: "themes" }}
               model={model}
             />
+          )}
+          {chapterEditorOpen && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setChapterEditorOpen(false);
+              }}
+            >
+              <div className="w-full max-w-lg max-h-[80vh] overflow-auto rounded-lg border border-stone-200 bg-white p-6 shadow-2xl">
+                <ChapterEditor
+                  initial={eras.map((e) => ({
+                    id: crypto.randomUUID(),
+                    name: e.name,
+                    start: e.start || "0000-00",
+                    note_count: e.note_count,
+                  }))}
+                  noteMonths={chapterEditorMonths}
+                  onConfirm={handleChapterEditorConfirm}
+                  onCancel={() => setChapterEditorOpen(false)}
+                  saving={chapterEditorSaving}
+                />
+              </div>
+            </div>
           )}
         </div>
       )}
