@@ -91,6 +91,11 @@ export function ChatWorkspace({
   const [cost, setCost] = useState<number>(0);
   const [error, setError] = useState<string>("");
   const [finalized, setFinalized] = useState<FinalizedInfo | null>(null);
+  const [canonicalDraft, setCanonicalDraft] = useState<string>("");
+  const [draftView, setDraftView] = useState<"canonical" | "working">(
+    "canonical",
+  );
+  const [sessionStartedOnce, setSessionStartedOnce] = useState(false);
   const [highlightDate, setHighlightDate] = useState<string>("");
 
   // Pane collapse state. Draft starts collapsed on first-ever mount —
@@ -116,6 +121,7 @@ export function ChatWorkspace({
   // Latches once we've auto-expanded draft on first content. Prevents
   // re-expanding if the user manually collapses it later in the session.
   const draftAutoExpandedRef = useRef<boolean>(false);
+  const autoSwitchedToDraftRef = useRef<boolean>(false);
 
   // Tier 2.5 resume: remember the run_dir of the in-flight session so
   // we can reconnect with `resume: true, run_id: …` if the WS dies
@@ -264,10 +270,7 @@ export function ChatWorkspace({
       })
       .then((data) => {
         if (cancelled || !data?.content) return;
-        // Populate the draft pane so the user can read what's already
-        // locked, but leave phase at "pre-gen" so the prompter stays
-        // active — clicking Start kicks off a fresh session that will
-        // overwrite this view with new content.
+        setCanonicalDraft(data.content);
         setDraft(data.content);
       })
       .catch(() => {});
@@ -320,16 +323,15 @@ export function ChatWorkspace({
     }
   }, [log, wsStatus]);
 
-  // ---- Cleanup: close WS on unmount. ----
+  // ---- Cleanup: close WS on unmount (detach only, no stop). ----
+  // Unmount happens on Eras↔Themes toggle and era switches — the session
+  // should keep running (Tier 3). The server sees the disconnect as a
+  // detach. When the user comes back, the mount-effect auto-attaches.
+  // Explicit stop is only sent via the Stop button (sendStop).
   useEffect(() => {
     return () => {
       const ws = wsRef.current;
       if (ws && ws.readyState <= WebSocket.OPEN) {
-        try {
-          ws.send(JSON.stringify({ type: "stop" }));
-        } catch {
-          // ignore
-        }
         ws.close();
       }
     };
@@ -358,10 +360,11 @@ export function ChatWorkspace({
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) return;
     const resuming = !!opts.resumeRunId;
     if (!resuming) {
-      // Fresh session: clear all state. Resume keeps the existing draft
-      // visible while the agent rehydrates from disk.
       setLog([]);
       setDraft("");
+      setDraftView("canonical");
+      setSessionStartedOnce(true);
+      autoSwitchedToDraftRef.current = false;
     }
     setReplyText("");
     draftAutoExpandedRef.current = false;
@@ -489,7 +492,13 @@ export function ChatWorkspace({
           (scope.kind === "era" && payload.kind === "output") ||
           (scope.kind === "themes" &&
             (payload.kind === "output" || payload.kind === "themes"));
-        if (interesting) setDraft(payload.content);
+        if (interesting) {
+          setDraft(payload.content);
+          if (!autoSwitchedToDraftRef.current) {
+            autoSwitchedToDraftRef.current = true;
+            setDraftView("working");
+          }
+        }
       } else if (t === "log") {
         flushNarration();
         setLog((l) => [...l, { kind: "status", text: payload.text }]);
@@ -506,6 +515,8 @@ export function ChatWorkspace({
         };
         setFinalized(info);
         setDraft(info.content);
+        setCanonicalDraft(info.content);
+        setDraftView("working");
         setPhase("finalized");
         // Locked — no point resuming this run after disconnect.
         setRunId(null);
@@ -637,6 +648,14 @@ export function ChatWorkspace({
         : wsStatus === "awaiting_reply"
           ? "awaiting_reply"
           : "generating";
+
+  const displayedDraft =
+    draftView === "canonical" ? canonicalDraft : draft;
+  const showDraftToggle =
+    !!canonicalDraft &&
+    !!draft &&
+    canonicalDraft !== draft &&
+    sessionStartedOnce;
 
   // Called as `{renderPrompter()}` rather than `<Prompter />`. Declaring this
   // as a component would give it a fresh function identity on every render of
@@ -867,9 +886,9 @@ export function ChatWorkspace({
           </div>
         )}
         <div className="px-6 pb-6 pt-3">
-          {draft ? (
+          {displayedDraft ? (
             <Markdown
-              content={draft}
+              content={displayedDraft}
               variant="chapter"
               onCiteClick={handleCiteClick}
             />
@@ -908,9 +927,9 @@ export function ChatWorkspace({
       <div className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-1 shrink-0">
         <span className="font-sans text-[11px] uppercase tracking-wider text-stone-500 shrink-0">
           {PANE_TITLES[id]}
-          {id === "draft" && draft && (
+          {id === "draft" && displayedDraft && (
             <span className="ml-1 normal-case tracking-normal text-stone-400">
-              ({draft.length.toLocaleString()} ch)
+              ({displayedDraft.length.toLocaleString()} ch)
             </span>
           )}
           {id === "notes" && notes.length > 0 && (
@@ -919,6 +938,31 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
+        {id === "draft" && showDraftToggle && (
+          <div className="flex items-center gap-1 text-[10px] font-sans">
+            <button
+              onClick={() => setDraftView("canonical")}
+              className={
+                draftView === "canonical"
+                  ? "text-stone-600 font-medium"
+                  : "text-stone-400 hover:text-stone-600"
+              }
+            >
+              canonical
+            </button>
+            <span className="text-stone-300">/</span>
+            <button
+              onClick={() => setDraftView("working")}
+              className={
+                draftView === "working"
+                  ? "text-stone-600 font-medium"
+                  : "text-stone-400 hover:text-stone-600"
+              }
+            >
+              working
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-1.5 ml-auto">
           {id === "chat" && sessionLive && (
             <button
@@ -997,7 +1041,7 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="mx-auto max-w-[120rem] px-6 py-4">
+    <div className="mx-auto max-w-[120rem] px-6 py-4 flex-1 flex flex-col min-h-0">
       {error && (
         <div className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {error}
@@ -1018,7 +1062,7 @@ export function ChatWorkspace({
       )}
 
       {/* ---- 3-pane workspace ---- */}
-      <div className="h-[80vh] rounded border border-stone-200 overflow-hidden bg-white">
+      <div className="flex-1 min-h-0 rounded border border-stone-200 overflow-hidden bg-white">
         <PanelGroup
           direction="horizontal"
           autoSaveId="workspace_panels_v2"

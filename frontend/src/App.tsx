@@ -595,7 +595,7 @@ export default function App() {
         </div>
       )}
       {corpusMode === "ready" && corpusInfo && (
-        <div className="min-h-full">
+        <div className="flex flex-col h-screen">
           <header className="border-b border-stone-200 bg-white">
             <div className="mx-auto max-w-[120rem] px-6 py-4 flex items-center gap-4">
               <div className="flex flex-1 items-center gap-4 min-w-0">
@@ -620,6 +620,9 @@ export default function App() {
                       aria-expanded={viewMode === "eras" ? chaptersOpen : undefined}
                     >
                       Chapters
+                      {viewMode === "eras" && (
+                        <svg className="ml-1 inline-block w-3 h-3 text-stone-600" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
+                      )}
                     </button>
                     {viewMode === "eras" && chaptersOpen && eras.length > 0 && (
                       <div

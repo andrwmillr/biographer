@@ -63,7 +63,7 @@ export function EraTab({
   const eraLabel = (
     <>
       {era.name}
-      {range ? `, ${range}` : ""}
+      {range ? ` (${range})` : ""}
     </>
   );
 
