@@ -35,7 +35,8 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from api import auth, chapters, corpora, drafts, imports, themes  # noqa: E402
-from core.session import gc_loop  # noqa: E402
+from core.session import all_sessions, gc_loop  # noqa: E402
+from core.telemetry import log as tlog  # noqa: E402
 
 
 @asynccontextmanager
@@ -52,6 +53,12 @@ async def lifespan(app: FastAPI):
             await gc_task
         except (asyncio.CancelledError, Exception):
             pass
+        # Log session_end for any sessions still alive at shutdown.
+        for sess in all_sessions():
+            extra = {"era": sess.era} if sess.era else {}
+            tlog("session_end", kind=sess.kind, email=sess.email,
+                 corpus=sess.corpus_id, reason="shutdown",
+                 cost_usd=sess.cumulative_cost, **extra)
 
 
 app = FastAPI(lifespan=lifespan)

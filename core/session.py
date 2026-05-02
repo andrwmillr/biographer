@@ -85,6 +85,10 @@ class Session:
     # watch, etc.). Started after the SDK client opens, cancelled when
     # the session shuts down.
     background_loop: Callable[["Session"], Awaitable[None]] | None = None
+    # User email — stored for telemetry on unclean shutdown.
+    email: str = ""
+    # Era name (era sessions only) — stored for telemetry.
+    era: str = ""
 
     client: ClaudeSDKClient | None = field(default=None, init=False)
     bootstrap_task: asyncio.Task | None = field(default=None, init=False)
@@ -291,6 +295,8 @@ async def create_session(
     spawned_event: dict,
     on_turn_complete: Callable[[str], Awaitable[None]] | None = None,
     background_loop: Callable[[Session], Awaitable[None]] | None = None,
+    email: str = "",
+    era: str = "",
 ) -> Session:
     """Create + register + kick off a new session. spawned_event is
     pre-emitted into the event log so first-attach replay shows it."""
@@ -303,6 +309,8 @@ async def create_session(
         kickoff=kickoff,
         on_turn_complete=on_turn_complete,
         background_loop=background_loop,
+        email=email,
+        era=era,
     )
     # Pre-seed the spawned event so attach replay sends it to clients.
     session.event_log.append(spawned_event)

@@ -88,10 +88,13 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
         "name, one-line gloss, era list, and 8-10 candidate notes. Use the "
         "OUTPUT FORMAT from the round-1 section. Stream as you go — don't "
         "summarize, don't wait.\n\n"
+        f"**After generating all themes,** write them to {run_dir_abs}/themes.md "
+        "using the Write tool in the LOCKING format from your system prompt. "
+        "This populates the Draft pane for the user.\n\n"
         "**Then transition to curate mode:** end with the single line "
         '"Ready for your moves." Wait for the user.\n\n'
-        f"When the user signals lock, write themes to {run_dir_abs}/themes.md "
-        "using the Write tool, in the LOCKING format from your system prompt. "
+        f"On subsequent locks, overwrite {run_dir_abs}/themes.md with the "
+        "final curated version. "
         "Don't list directories, don't read sibling files, don't browse "
         "anywhere else.\n\n"
         "--- INPUT-START ---\n\n"
@@ -360,6 +363,7 @@ async def themes_curate(ws: WebSocket):
                 spawned_event=spawned_event,
                 on_turn_complete=on_turn_complete,
                 background_loop=_themes_watch,
+                email=user_email,
             )
             tlog("session_start", kind="themes", email=user_email,
                  corpus=corpus_id, model=model,

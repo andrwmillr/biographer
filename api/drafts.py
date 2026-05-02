@@ -514,6 +514,8 @@ async def session(ws: WebSocket):
                 kickoff=kickoff,
                 spawned_event=spawned_event,
                 background_loop=_era_watch,
+                email=user_email,
+                era=era,
             )
             tlog("session_start", kind="era", email=user_email,
                  corpus=corpus_id, era=era, model=model,
