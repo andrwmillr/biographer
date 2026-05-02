@@ -229,9 +229,9 @@ export function NotesTimeline({
                                     "text-[12px] leading-[18px] text-left max-w-full truncate hover:text-stone-900 " +
                                     (isSelected
                                       ? "text-stone-900 font-medium"
-                                      : n.sampled
-                                        ? "text-stone-700"
-                                        : "text-stone-400")
+                                      : n.sampled === false
+                                        ? "text-stone-400"
+                                        : "text-stone-700")
                                   }
                                   title={`${n.date.slice(0, 10)} · ${n.label}${
                                     n.source ? ` · ${n.source}` : ""
