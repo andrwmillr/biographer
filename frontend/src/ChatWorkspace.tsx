@@ -196,7 +196,21 @@ export function ChatWorkspace({
       // Only reconnect from the terminal states startSession will accept.
       // If we're mid-generating (very unlikely with a dead ws but…), skip.
       if (wsStatus === "generating" || wsStatus === "connecting") return;
-      startSession({ resumeRunId: runId });
+      // Check server liveness before resuming — after a server restart the
+      // session is gone and we shouldn't cold-resume from stale localStorage.
+      fetch(
+        `${apiBase}/session/active?run_id=${encodeURIComponent(runId)}`,
+        { headers: authHeaders() },
+      )
+        .then((r) => (r.ok ? r.json() : { active: false }))
+        .then((data) => {
+          if (data?.active) {
+            startSession({ resumeRunId: runId });
+          } else {
+            setRunId(null);
+          }
+        })
+        .catch(() => {});
     }
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -220,7 +234,11 @@ export function ChatWorkspace({
       .then((r) => (r.ok ? r.json() : { active: false }))
       .then((data) => {
         if (cancelled) return;
-        if (data?.active) startSession({ resumeRunId: runId });
+        if (data?.active) {
+          startSession({ resumeRunId: runId });
+        } else {
+          setRunId(null);
+        }
       })
       .catch(() => {});
     return () => {
@@ -753,29 +771,53 @@ export function ChatWorkspace({
             </span>
           )}
           {wsStatus === "generating" &&
-            !resumedRef.current &&
             !log.some((it) => it.kind === "narration") &&
             (() => {
               const inputChars = spawned?.input_chars ?? 0;
               const totalTok = Math.round(inputChars / 4);
-              if (totalTok <= 0) return null;
-              // Conservative prompt-processing rate (~1.5K tok/s) capped
-              // at 90% so we never claim "almost done" before the model
-              // actually emits.
-              const progressTok = Math.min(
-                Math.round(wsElapsed * 1500),
-                Math.round(totalTok * 0.9),
-              );
-              const fmt = (n: number) =>
-                n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+              const fmtTime = (s: number) =>
+                s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+              // Fresh session with known input size: show token progress bar.
+              if (!resumedRef.current && totalTok > 0) {
+                const progressTok = Math.min(
+                  Math.round(wsElapsed * 1500),
+                  Math.round(totalTok * 0.9),
+                );
+                const fmt = (n: number) =>
+                  n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+                return (
+                  <div className="my-2 space-y-1">
+                    <div className="flex items-center gap-2 text-stone-500">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
+                      <span className="text-stone-400">
+                        <span className="tabular-nums">{fmt(progressTok)}</span>
+                        {" / "}
+                        <span className="tabular-nums">{fmt(totalTok)}</span> tokens
+                        <span className="ml-2 text-stone-300">{fmtTime(wsElapsed)}</span>
+                      </span>
+                    </div>
+                    {wsElapsed >= 120 && (
+                      <div className="text-xs text-amber-600">
+                        Taking longer than expected — session may be stuck.
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              // Resumed session or no spawned info: show generic elapsed.
               return (
-                <div className="my-2 flex items-center gap-2 text-stone-500">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
-                  <span className="text-stone-400">
-                    <span className="tabular-nums">{fmt(progressTok)}</span>
-                    {" / "}
-                    <span className="tabular-nums">{fmt(totalTok)}</span> tokens
-                  </span>
+                <div className="my-2 space-y-1">
+                  <div className="flex items-center gap-2 text-stone-500">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-400 animate-pulse" />
+                    <span className="text-stone-400">
+                      {resumedRef.current ? "reconnected — " : ""}agent working… {fmtTime(wsElapsed)}
+                    </span>
+                  </div>
+                  {wsElapsed >= 120 && (
+                    <div className="text-xs text-amber-600">
+                      Taking longer than expected — session may be stuck.
+                    </div>
+                  )}
                 </div>
               );
             })()}
