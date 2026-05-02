@@ -115,12 +115,22 @@ class Session:
                 self.attached.discard(ws)
 
     async def attach(self, ws: WebSocket) -> None:
-        """Replay event_log to this WS, then add to attached set."""
-        for event in self.event_log:
-            try:
-                await ws.send_text(json.dumps(event))
-            except Exception:
-                return
+        """Replay event_log then add to attached set. Uses a catch-up
+        loop: each ws.send_text is a yield point where emit() can append
+        new events. We re-slice after each batch until the gap is zero,
+        then add to attached — no await between the empty check and the
+        add, so no event can slip through."""
+        sent = 0
+        while True:
+            pending = self.event_log[sent:]
+            if not pending:
+                break
+            for event in pending:
+                try:
+                    await ws.send_text(json.dumps(event))
+                except Exception:
+                    return
+            sent += len(pending)
         self.attached.add(ws)
         self.last_attached_at = time.time()
 
@@ -309,8 +319,11 @@ async def gc_loop() -> None:
             if session.attached:
                 continue
             if (now - session.last_attached_at) > GC_IDLE_SECONDS:
+                # Recheck: a WS may have attached during a prior
+                # iteration's stop() (which awaits the bootstrap task).
+                if session.attached:
+                    continue
                 try:
                     await session.stop()
                 except Exception:
                     pass
-                _SESSIONS.pop(run_id, None)
