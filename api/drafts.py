@@ -33,7 +33,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from core import corpus as wb
-from core.session import Session, create_session, get_session
+from core.session import Session, all_sessions, create_session, get_session
 from core.telemetry import log as tlog
 
 router = APIRouter()
@@ -41,19 +41,16 @@ router = APIRouter()
 
 @router.get("/session/active")
 def session_active(
-    run_id: str,
+    kind: str,
     session: str = Depends(require_corpus_access),
 ):
-    """Cheap liveness check used by the workspace mount effect to decide
-    whether to auto-resume. Returns active=True only if the session is in
-    the in-memory registry AND owned by the requesting corpus, so we
-    don't auto-spin-up a cold-resume SDK from a stale localStorage runId
-    every time the page is opened, and don't leak existence of another
-    corpus's session."""
-    sess = get_session(run_id)
-    if sess is None or sess.corpus_id != _session_corpus_id(session):
-        return {"active": False}
-    return {"active": True}
+    """Check if there's a live in-memory session for this corpus + kind.
+    Returns the run_id so the client can reconnect without storing it."""
+    corpus_id = _session_corpus_id(session)
+    for sess in all_sessions():
+        if sess.corpus_id == corpus_id and sess.kind == kind:
+            return {"active": True, "run_id": sess.run_id}
+    return {"active": False, "run_id": None}
 
 
 class DraftRequest(BaseModel):

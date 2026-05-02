@@ -13,4 +13,4 @@ exec uv run \
   --with pyyaml \
   --with claude-agent-sdk \
   python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 \
-    --timeout-graceful-shutdown 2
+    --timeout-graceful-shutdown 10

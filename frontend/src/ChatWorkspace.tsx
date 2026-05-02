@@ -118,27 +118,10 @@ export function ChatWorkspace({
   const draftAutoExpandedRef = useRef<boolean>(false);
   const autoSwitchedToDraftRef = useRef<boolean>(false);
 
-  // Tier 2.5 resume: remember the run_dir of the in-flight session so
-  // we can reconnect with `resume: true, run_id: …` if the WS dies
-  // (tab put to sleep, network blip, etc.). Keyed in localStorage by
-  // corpus + workflow + scope so different corpora and eras don't
-  // collide (e.g. two corpora that share an era name).
-  const corpusSlug = getSession() || "";
-  const runIdStorageKey =
-    scope.kind === "era"
-      ? `workspace_run_${corpusSlug}_era_${scope.era}`
-      : `workspace_run_${corpusSlug}_themes_default`;
-  const runIdRef = useRef<string | null>(
-    typeof window !== "undefined"
-      ? window.localStorage.getItem(runIdStorageKey)
-      : null,
-  );
-  function setRunId(runId: string | null) {
-    runIdRef.current = runId;
-    if (typeof window === "undefined") return;
-    if (runId) window.localStorage.setItem(runIdStorageKey, runId);
-    else window.localStorage.removeItem(runIdStorageKey);
-  }
+  // Run ID of the current session — only lives in memory. Server is the
+  // source of truth for whether a session exists; we just need the ID
+  // to pass on WS resume messages.
+  const runIdRef = useRef<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const narrationBufRef = useRef<string>("");
@@ -180,70 +163,38 @@ export function ChatWorkspace({
     return () => document.removeEventListener("keydown", onKey);
   }, [popOut]);
 
-  // Tier 2.5 reconnect: when the tab becomes visible again and the WS
-  // is dead but we have a remembered run_dir for this scope, try to
-  // reconnect with `resume: true` so the agent picks up from disk
-  // state. Tab-switching is the most common cause of unintended drops
-  // (browser timer throttling → tunnel idle timeout → WS reaped).
+  // Auto-attach: on mount and on tab-becoming-visible, ask the server
+  // if there's a live session for this corpus+kind. If yes, reconnect.
+  // Server is the sole source of truth — no client-side run_id storage.
+  function checkAndResume() {
+    const ws = wsRef.current;
+    if (ws && ws.readyState <= WebSocket.OPEN) return; // already connected
+    fetch(
+      `${apiBase}/session/active?kind=${scope.kind}`,
+      { headers: authHeaders() },
+    )
+      .then((r) => (r.ok ? r.json() : { active: false }))
+      .then((data) => {
+        if (data?.active && data.run_id) {
+          startSession({ resumeRunId: data.run_id });
+        }
+      })
+      .catch(() => {});
+  }
+
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== "visible") return;
-      const ws = wsRef.current;
-      const wsAlive = ws && ws.readyState <= WebSocket.OPEN;
-      if (wsAlive) return;
-      const runId = runIdRef.current;
-      if (!runId) return;
-      // Only reconnect from the terminal states startSession will accept.
-      // If we're mid-generating (very unlikely with a dead ws but…), skip.
-      if (wsStatus === "generating" || wsStatus === "connecting") return;
-      // Check server liveness before resuming — after a server restart the
-      // session is gone and we shouldn't cold-resume from stale localStorage.
-      fetch(
-        `${apiBase}/session/active?run_id=${encodeURIComponent(runId)}`,
-        { headers: authHeaders() },
-      )
-        .then((r) => (r.ok ? r.json() : { active: false }))
-        .then((data) => {
-          if (data?.active) {
-            startSession({ resumeRunId: runId });
-          } else {
-            setRunId(null);
-          }
-        })
-        .catch(() => {});
+      checkAndResume();
     }
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsStatus]);
 
-  // visibilitychange doesn't fire on initial mount (the tab was already
-  // visible when the page loaded), so a freshly-opened tab with a
-  // remembered run_id sits empty until the user tab-switches. Auto-attach
-  // here ONLY when the server confirms the session is still in memory —
-  // we don't want to silently spin up a cold-resume SDK from a stale
-  // localStorage runId every time the page is opened.
+  // Also check on mount (visibilitychange doesn't fire on initial load).
   useEffect(() => {
-    const runId = runIdRef.current;
-    if (!runId) return;
-    let cancelled = false;
-    fetch(
-      `${apiBase}/session/active?run_id=${encodeURIComponent(runId)}`,
-      { headers: authHeaders() },
-    )
-      .then((r) => (r.ok ? r.json() : { active: false }))
-      .then((data) => {
-        if (cancelled) return;
-        if (data?.active) {
-          startSession({ resumeRunId: runId });
-        } else {
-          setRunId(null);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    checkAndResume();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -365,8 +316,8 @@ export function ChatWorkspace({
     // synchronously inside this function — checking it catches the dupe.
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) return;
     const resuming = !!opts.resumeRunId;
+    setLog([]);
     if (!resuming) {
-      setLog([]);
       setDraft("");
       setDraftView("canonical");
       setSessionStartedOnce(true);
@@ -450,7 +401,7 @@ export function ChatWorkspace({
         setSpawned(info);
         // Persist run_dir for resume on reconnect.
         if (info.run_dir) {
-          setRunId(info.run_dir);
+          runIdRef.current = info.run_dir;
           console.info(`[biographer] session: ${info.run_dir}`);
         }
         const summary =
@@ -528,7 +479,7 @@ export function ChatWorkspace({
         setDraftView("working");
         setPhase("finalized");
         // Locked — no point resuming this run after disconnect.
-        setRunId(null);
+        runIdRef.current = null;
         if (onFinalized) onFinalized(info);
       } else if (t === "user_message") {
         flushNarration();
@@ -536,12 +487,12 @@ export function ChatWorkspace({
       } else if (t === "done") {
         flushNarration();
         setWsStatus("done");
-        setRunId(null);
+        runIdRef.current = null;
         if (typeof payload.cost_usd === "number") setCost(payload.cost_usd);
       } else if (t === "error") {
         setError(payload.message ?? "unknown error");
         setWsStatus("error");
-        setRunId(null);
+        runIdRef.current = null;
       }
     };
 
@@ -600,7 +551,7 @@ export function ChatWorkspace({
     // Clear runId regardless: even if the stop message gets dropped, we
     // don't want the next mount-effect to auto-attach to the abandoned
     // session. GC will reap it after 30 min.
-    setRunId(null);
+    runIdRef.current = null;
     // Reset only the prompter / session-status surface back to its OG
     // state — the chat log and the draft stay so the user can review
     // the run after stopping. cost is preserved so the running tally

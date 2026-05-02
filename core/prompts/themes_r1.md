@@ -16,7 +16,7 @@ Aim for a mix: some themes about the *form* (how the writing moves — drafting,
 
 ## PROCESS
 
-Stream themes one at a time. Start emitting the first theme block as soon as you have it — don't batch, don't outline first. The user is watching live; visible progress beats a polished plan.
+Stream themes one at a time. Start emitting the first theme block as soon as you have it — don't batch, don't outline first, don't read the entire corpus before writing. Identify a pattern, emit it, keep reading for the next one. The user is watching live and will see nothing until your first text token arrives; aim to emit within 30 seconds of starting. Visible progress beats a polished plan.
 
 ## WHAT MAKES A THEME
 

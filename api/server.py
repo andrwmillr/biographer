@@ -21,6 +21,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,11 +40,41 @@ from core.session import all_sessions, gc_loop  # noqa: E402
 from core.telemetry import log as tlog  # noqa: E402
 
 
+def _reap_orphan_subprocesses() -> None:
+    """Kill any claude agent subprocesses left over from a prior server run.
+    On startup these are definitionally orphans — no session object owns them."""
+    import signal
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
+            capture_output=True, text=True,
+        )
+        for pid_str in result.stdout.strip().splitlines():
+            pid = int(pid_str)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if result.stdout.strip():
+            import time
+            time.sleep(0.5)
+            # SIGKILL any that didn't exit
+            for pid_str in result.stdout.strip().splitlines():
+                try:
+                    os.kill(int(pid_str), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start the session GC reaper. Sessions outlive their WS by design
     (Tier 3 resilience), so something has to clean up sessions whose
     user has truly walked away — gc_loop reaps after GC_IDLE_SECONDS."""
+    _reap_orphan_subprocesses()
     gc_task = asyncio.create_task(gc_loop())
     try:
         yield
@@ -53,8 +84,18 @@ async def lifespan(app: FastAPI):
             await gc_task
         except (asyncio.CancelledError, Exception):
             pass
-        # Log session_end for any sessions still alive at shutdown.
-        for sess in all_sessions():
+        # Stop all live sessions (kills subprocess) and log telemetry.
+        # Run stops concurrently with a tight timeout — uvicorn's
+        # graceful-shutdown window is only 2s.
+        sessions = all_sessions()
+        if sessions:
+            async def _stop_one(s):
+                try:
+                    await asyncio.wait_for(s.stop(), timeout=3)
+                except Exception:
+                    pass
+            await asyncio.gather(*[_stop_one(s) for s in sessions])
+        for sess in sessions:
             extra = {"era": sess.era} if sess.era else {}
             tlog("session_end", kind=sess.kind, email=sess.email,
                  corpus=sess.corpus_id, reason="shutdown",

@@ -83,14 +83,14 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
         + "You're starting a fresh themes session. "
         "The corpus sample is inlined between INPUT-START / INPUT-END below — "
         "treat it as the entirety of your authorized source material.\n\n"
-        "**Before anything else,** narrate one short line to the user acknowledging "
-        "you're starting (e.g. 'Reading across N eras to find recurring threads…'). "
-        "This gives them immediate visible feedback.\n\n"
-        "**Then generate round-1 themes** following the rules in your system "
+        "Start work immediately. Stream themes one at a time — emit the first "
+        "theme block as soon as you have it. Don't read the whole corpus before "
+        "writing; read enough to identify a pattern, emit it, then keep going. "
+        "The user is watching live; visible progress beats a polished plan.\n\n"
+        "**Generate round-1 themes** following the rules in your system "
         "prompt's round-1 section: 8-12 candidate themes, each with a short "
         "name, one-line gloss, era list, and 8-10 candidate notes. Use the "
-        "OUTPUT FORMAT from the round-1 section. Stream as you go — don't "
-        "summarize, don't wait.\n\n"
+        "OUTPUT FORMAT from the round-1 section.\n\n"
         f"**After generating all themes,** write them to {run_dir_abs}/themes.md "
         "using the Write tool in the LOCKING format from your system prompt. "
         "This populates the Draft pane for the user.\n\n"
@@ -332,6 +332,7 @@ async def themes_curate(ws: WebSocket):
                 settings=str(settings_path),
                 cwd=str(run_dir_abs),
                 include_partial_messages=True,
+                effort="low",
                 env=sub_env,
             )
 
