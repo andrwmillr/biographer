@@ -76,7 +76,7 @@ export default function App() {
   // EraTab + ChatWorkspace share the same selection.
   const [model, _setModel] = useState<(typeof MODELS)[number]>(() => {
     const stored = localStorage.getItem("model");
-    return MODELS.includes(stored as any) ? (stored as (typeof MODELS)[number]) : "opus-4.7";
+    return MODELS.includes(stored as any) ? (stored as (typeof MODELS)[number]) : "sonnet-4.6";
   });
   const setModel = (v: (typeof MODELS)[number]) => {
     _setModel(v);
