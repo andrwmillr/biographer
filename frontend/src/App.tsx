@@ -865,7 +865,7 @@ export default function App() {
               </div>
             </div>
           </header>
-          <div className={viewMode === "eras" ? "" : "hidden"}>
+          <div className={viewMode === "eras" ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
             <EraTab
               apiBase={API_BASE}
               wsBase={WS_BASE}
@@ -875,7 +875,7 @@ export default function App() {
               onChapterFinalized={reloadEras}
             />
           </div>
-          <div className={viewMode === "themes" ? "" : "hidden"}>
+          <div className={viewMode === "themes" ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
             <ChatWorkspace
               key="themes"
               apiBase={API_BASE}
