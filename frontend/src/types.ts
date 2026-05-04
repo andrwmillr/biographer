@@ -43,8 +43,10 @@ export type Phase = "pre-gen" | "generating" | "iterating" | "finalized";
 // folder-aware sample (the parameters that used to live in this scope
 // are now baked into the protocol).
 export type WorkspaceScope =
-  | { kind: "era"; era: string }
-  | { kind: "themes" };
+  | { kind: "era"; era: string; eraStart: string | null; eraEnd: string | null }
+  | { kind: "themes" }
+  | { kind: "preface" }
+  | { kind: "commonplace" };
 
 // Server-emitted spawned event. Common fields plus scope-specific extras.
 export type SpawnedInfo = {
@@ -60,6 +62,10 @@ export type SpawnedInfo = {
   future_digests?: number;
   // themes-only
   top_n?: number;
+  // commonplace-only
+  sampled_count?: number;
+  seen_before?: number;
+  total_eligible?: number;
 };
 
 export type FinalizedInfo = {

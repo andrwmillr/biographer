@@ -60,7 +60,7 @@ def _prepare_themes_run(top_n: int = 5, corpus_id: str | None = None) -> dict:
     Returns {run_dir, run_rel, full_user_msg, top_n, in_chars}."""
     from core.sampling import build_input
 
-    user_msg = build_input(top_n, corpus_id=corpus_id)
+    user_msg, _ = build_input(top_n, corpus_id=corpus_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _themes_base(corpus_id) / f"run_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)

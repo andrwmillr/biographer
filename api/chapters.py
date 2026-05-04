@@ -107,19 +107,17 @@ def note_months(session: str = Depends(require_writable)):
 # ---- POST /chapters/propose ----
 
 PROPOSE_SYSTEM = """\
-You are analyzing a personal journal or diary corpus to propose meaningful \
-chapter boundaries. Chapters should reflect life phases — moves, jobs, \
-relationships, projects, seasons of writing — not arbitrary date splits. \
-Prefer 4–12 chapters for a typical corpus.
+You propose chapter boundary dates for a personal writing corpus. \
+Output ONLY a raw JSON array. No prose, no analysis, no markdown.
 
-Each chapter needs a short evocative name (not just a date range) and a \
-start month (YYYY-MM format). The first chapter's start should be the \
-earliest month with notes, or "0000-00" if you want a catch-all for \
-undated/early notes.
+Rules:
+- Each element: {"start": "YYYY-MM"}
+- Sorted chronologically
+- 4–12 chapters reflecting life phases, not arbitrary splits
+- First start = earliest month with notes (or "0000-00" for undated)
 
-Respond with ONLY a JSON array of {"name": "...", "start": "YYYY-MM"} \
-objects sorted chronologically. No explanation, no markdown fences, no \
-trailing text."""
+Example output:
+[{"start":"2012-12"},{"start":"2020-03"},{"start":"2024-12"}]"""
 
 EXCERPT_CHARS_PER_NOTE = 200
 MAX_EXCERPTS_PER_MONTH = 3
@@ -221,9 +219,10 @@ def _build_corpus_overview(corpus_id: str) -> tuple[str, list[str]]:
 
 @router.post("/chapters/propose")
 async def propose_chapters(session: str = Depends(require_writable)):
-    """Analyze uploaded notes and propose chapter boundaries via Claude.
+    """Analyze uploaded notes and propose chapter boundaries via Claude CLI.
     Returns SSE stream with progress events and the final result."""
-    import anthropic
+    import asyncio
+    import os
 
     corpus_id = _session_corpus_id(session)
     cdir = corpus_dir(session)
@@ -246,41 +245,74 @@ async def propose_chapters(session: str = Depends(require_writable)):
             "note_count": len(note_months),
         })
 
-        # Phase 2: call Claude
+        # Phase 2: call Claude via CLI (uses subscription, not API key)
         subject_ctx = wb.subject_context_for(corpus_id)
-        user_msg = f"{subject_ctx}\n\n{overview}"
+        stdin_msg = f"{subject_ctx}\n\n{overview}"
+
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
         try:
-            client = anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
-                system=PROPOSE_SYSTEM,
-                messages=[{"role": "user", "content": user_msg}],
+            proc = await asyncio.create_subprocess_exec(
+                "claude",
+                "-p",
+                "--model", "claude-sonnet-4-20250514",
+                "--system-prompt", PROPOSE_SYSTEM,
+                "--output-format", "json",
+                "--no-session-persistence",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
-            raw = response.content[0].text.strip()
+
+            stdout_data, stderr_data = await proc.communicate(
+                stdin_msg.encode("utf-8")
+            )
+
+            if proc.returncode != 0:
+                err = stderr_data.decode("utf-8", errors="replace")
+                yield _sse("error", {"message": f"claude exited {proc.returncode}: {err[-500:]}"})
+                return
+
+            # --output-format json returns {"result": "...", ...}
+            stdout_str = stdout_data.decode("utf-8", errors="replace")
+            if not stdout_str.strip():
+                stderr_str = stderr_data.decode("utf-8", errors="replace")
+                yield _sse("error", {"message": f"claude returned empty stdout. stderr: {stderr_str[-500:]}"})
+                return
+            output = json.loads(stdout_str)
+            raw = output.get("result", "").strip()
+            if not raw:
+                yield _sse("error", {"message": f"claude returned empty result", "raw": stdout_str[:1000]})
+                return
         except Exception as e:
-            yield _sse("error", {"message": f"Claude API error: {e}"})
+            yield _sse("error", {"message": f"Claude CLI error: {e}"})
             return
 
-        # Phase 3: parse response
+        # Phase 3: parse response — try raw first, then extract JSON array
         try:
-            # Strip markdown fences if model included them anyway
             cleaned = re.sub(r"^```(?:json)?\s*", "", raw)
             cleaned = re.sub(r"\s*```$", "", cleaned)
-            proposed = json.loads(cleaned)
+            try:
+                proposed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+                if not match:
+                    raise
+                proposed = json.loads(match.group())
             if not isinstance(proposed, list):
                 raise ValueError("expected a JSON array")
         except (json.JSONDecodeError, ValueError) as e:
             yield _sse("error", {
-                "message": f"failed to parse Claude's response: {e}",
-                "raw": raw,
+                "message": f"failed to parse Claude's response: {e}\n\nRaw ({len(raw)} chars): {raw[:500]}",
             })
             return
 
-        # Compute note counts for each proposed chapter
+        # Assign placeholder names and compute note counts
         proposed.sort(key=lambda c: c.get("start", ""))
         for idx, ch in enumerate(proposed):
+            if not ch.get("name"):
+                ch["name"] = f"Chapter {idx + 1}"
             start = ch.get("start", "0000-00")
             end = (
                 proposed[idx + 1]["start"]

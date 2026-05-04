@@ -19,7 +19,7 @@ from pathlib import Path
 
 from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import ClaudeAgentOptions
-from api.config import KICKOFF_PATH, REPO
+from api.config import KICKOFF_PATH, PREFACE_PATH, REPO
 from api.corpora import (
     _load_state,
     _session_corpus_id,
@@ -583,6 +583,254 @@ async def session(ws: WebSocket):
                 })
                 tlog("session_end", kind="era", email=user_email,
                      corpus=corpus_id, era=era, reason="finalized",
+                     cost_usd=sess.cumulative_cost,
+                     words=promoted["words"],
+                     run_id=sess.run_id)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await send({"type": "error", "message": f"{type(e).__name__}: {e}"})
+    finally:
+        if sess is not None:
+            sess.detach(ws)
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Preface session
+# ---------------------------------------------------------------------------
+
+def _prepare_preface_run(corpus_id: str | None = None) -> dict:
+    """Build the preface input and create a fresh run dir. Returns
+    {run_dir, run_rel, full_user_msg, in_chars}."""
+    from core.preface import build_preface_input
+
+    user_msg = build_preface_input(corpus_id)
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    run_dir = wb.biographies_dir(corpus_id) / "_dump" / "preface" / "runs" / timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "user.md").write_text(user_msg, encoding="utf-8")
+    return {
+        "run_dir": run_dir,
+        "run_rel": str(run_dir.relative_to(REPO)),
+        "full_user_msg": user_msg,
+        "in_chars": len(user_msg),
+    }
+
+
+def _build_preface_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | None) -> str:
+    """Build the preface kickoff: subject context + task + inlined material."""
+    return (
+        wb.subject_context_for(corpus_id)
+        + "Write the preface for a personal-archive retrospective.\n\n"
+        f"Write the preface to {run_dir_abs}/output.md following your system "
+        "prompt rules. One checkpoint (proposed framing) before drafting.\n\n"
+        "Don't list directories, read sibling files, or browse anywhere "
+        "else. The inlined block is your full context.\n\n"
+        "Start work immediately. No preamble questions. The user is watching "
+        "live — begin narrating what you notice as you read through the "
+        "chapters. Name specific moments, threads, and connections. Emit your "
+        "first observations within 30 seconds; silence longer than that makes "
+        "the session feel broken.\n\n"
+        "--- INPUT-START ---\n\n"
+        + user_msg
+        + "\n\n--- INPUT-END ---\n"
+    )
+
+
+def _promote_preface(run_dir: Path, corpus_id: str | None) -> dict:
+    """Copy run_dir/output.md → chapters/00_Preface.md."""
+    src = run_dir / "output.md"
+    if not src.is_file():
+        raise ValueError(f"no output.md in {run_dir}")
+    dst = wb.chapters_dir(corpus_id) / "00_Preface.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    overwritten = dst.exists()
+    content = src.read_text(encoding="utf-8")
+    dst.write_text(content, encoding="utf-8")
+    return {
+        "content": content,
+        "location": str(dst.relative_to(REPO)),
+        "words": len(content.split()),
+        "overwritten": overwritten,
+    }
+
+
+@router.get("/preface/latest")
+def get_latest_preface(session: str = Depends(require_corpus_access)):
+    """Return the canonical preface if it exists."""
+    corpus_id = _session_corpus_id(session)
+    preface_path = wb.chapters_dir(corpus_id) / "00_Preface.md"
+    if not preface_path.exists():
+        raise HTTPException(404, "no preface yet")
+    return {"content": preface_path.read_text(encoding="utf-8")}
+
+
+@router.websocket("/preface-session")
+async def preface_session(ws: WebSocket):
+    await ws.accept()
+
+    async def send(obj: dict):
+        try:
+            await ws.send_text(json.dumps(obj))
+        except Exception:
+            pass
+
+    async def reject(message: str):
+        await send({"type": "error", "message": message})
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+    try:
+        first = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+    if first.get("type") != "start":
+        await reject("first message must be {type:'start', session, token}")
+        return
+
+    session_slug = first.get("session")
+    auth_token = first.get("token")
+    if not session_slug:
+        await reject("missing session in start message")
+        return
+    try:
+        corpus_dir(session_slug)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
+    if not is_sample_corpus(session_slug):
+        if not auth_token:
+            await reject("auth required: missing token in start message")
+            return
+        state = _gc_auth(_load_auth())
+        record = state["sessions"].get(auth_token)
+        if not record:
+            await reject("invalid or expired auth token")
+            return
+        if session_slug not in state["users"].get(record["email"], []):
+            await reject("this corpus is not owned by the authenticated user")
+            return
+    corpus_id = _session_corpus_id(session_slug)
+    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
+
+    sess: Session | None = None
+    try:
+        resume_run_rel = first.get("run_id") if first.get("resume") else None
+        if resume_run_rel:
+            existing = get_session(resume_run_rel)
+            if existing is not None and existing.kind == "preface" and existing.corpus_id == corpus_id:
+                sess = existing
+                await sess.attach(ws)
+
+        if sess is None:
+            model_key = first.get("model")
+            model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
+
+            prep = _prepare_preface_run(corpus_id)
+            run_dir = prep["run_dir"]
+            run_dir_abs = run_dir.resolve()
+            kickoff = _build_preface_kickoff(run_dir_abs, prep["full_user_msg"], corpus_id)
+
+            preface_system = PREFACE_PATH.read_text(encoding="utf-8")
+
+            runs_parent_abs = run_dir_abs.parent
+            settings = {
+                "permissions": {
+                    "deny": [
+                        f"Read({runs_parent_abs}/**)",
+                        f"Edit({runs_parent_abs}/**)",
+                        f"Write({runs_parent_abs}/**)",
+                    ],
+                    "allow": [
+                        f"Read({run_dir_abs}/**)",
+                        f"Edit({run_dir_abs}/**)",
+                        f"Write({run_dir_abs}/**)",
+                    ],
+                }
+            }
+            settings_path = run_dir / ".claude-settings.json"
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+            sub_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+            options = ClaudeAgentOptions(
+                model=model,
+                system_prompt=preface_system,
+                permission_mode="acceptEdits",
+                allowed_tools=["Read", "Edit", "Write"],
+                settings=str(settings_path),
+                cwd=str(run_dir_abs),
+                include_partial_messages=True,
+                env=sub_env,
+            )
+
+            spawned_event = {
+                "type": "spawned",
+                "model": model,
+                "run_dir": prep["run_rel"],
+                "input_chars": prep["in_chars"],
+                "resumed": False,
+            }
+
+            sess = await create_session(
+                run_id=prep["run_rel"],
+                run_dir=run_dir_abs,
+                corpus_id=corpus_id,
+                kind="preface",
+                options=options,
+                kickoff=kickoff,
+                spawned_event=spawned_event,
+                background_loop=_era_watch,  # same output.md watcher
+                email=user_email,
+            )
+            tlog("session_start", kind="preface", email=user_email,
+                 corpus=corpus_id, model=model,
+                 run_id=prep["run_rel"])
+            await sess.attach(ws)
+
+        while True:
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
+            mtype = msg.get("type")
+            if mtype == "ping":
+                await send({"type": "pong"})
+                continue
+            if mtype == "stop":
+                tlog("session_end", kind="preface", email=user_email,
+                     corpus=corpus_id, reason="stop",
+                     cost_usd=sess.cumulative_cost,
+                     run_id=sess.run_id)
+                await sess.stop()
+                break
+            if mtype == "reply":
+                text = (msg.get("text") or "").strip()
+                if text:
+                    await sess.query(text)
+            elif mtype == "finalize":
+                await sess.wait_idle()
+                try:
+                    promoted = _promote_preface(sess.run_dir, corpus_id)
+                except ValueError as exc:
+                    await send({"type": "error", "message": str(exc)})
+                    continue
+                await sess.emit({
+                    "type": "finalized",
+                    "content": promoted["content"],
+                    "location": promoted["location"],
+                    "words": promoted["words"],
+                    "overwritten": promoted["overwritten"],
+                })
+                tlog("session_end", kind="preface", email=user_email,
+                     corpus=corpus_id, reason="finalized",
                      cost_usd=sess.cumulative_cost,
                      words=promoted["words"],
                      run_id=sess.run_id)

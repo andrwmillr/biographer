@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChapterEditor, type ChapterDraft } from "./ChapterEditor";
 import { authHeaders, setSession } from "./auth";
 
@@ -47,7 +47,14 @@ export function ImportFlow({
   const [analyzeStatus, setAnalyzeStatus] = useState<string>("");
   const [proposedChapters, setProposedChapters] = useState<ChapterDraft[]>([]);
   const [noteMonths, setNoteMonths] = useState<string[]>([]);
+  const [corpusTitle, setCorpusTitle] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (step === "analyzing" && initialInfo && !initialInfo.has_eras) {
+      runPropose();
+    }
+  }, []);
 
   async function handleNotesUpload(file: File) {
     setError("");
@@ -159,9 +166,21 @@ export function ImportFlow({
   }
 
   async function handleConfirm(chapters: ChapterDraft[]) {
+    if (!corpusTitle.trim()) {
+      setError("Give your corpus a name first");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
+      // Save title
+      const tr = await fetch(`${apiBase}/corpus`, {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ title: corpusTitle.trim() }),
+      });
+      if (!tr.ok)
+        throw new Error(`title save: HTTP ${tr.status}: ${await tr.text()}`);
       const resp = await fetch(`${apiBase}/chapters/save`, {
         method: "PUT",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
@@ -188,16 +207,13 @@ export function ImportFlow({
   if (step === "notes") {
     return (
       <div>
-        <h2 className="font-serif text-lg text-stone-900">
-          Upload your notes
-        </h2>
-        <p className="mt-1 mb-4 text-stone-600 text-sm leading-relaxed">
-          Drop a zip of{" "}
-          <code className="bg-stone-100 px-1 rounded text-xs">.md</code> or{" "}
-          <code className="bg-stone-100 px-1 rounded text-xs">.txt</code>{" "}
-          files to import a corpus.
+        <p className="mb-4 text-stone-600 text-sm leading-relaxed">
+          Drop a zip of .md or .txt files to import a corpus.
         </p>
-        <label className="block">
+        <label className="inline-flex items-center justify-center w-12 h-12 rounded-full border border-stone-300 bg-white cursor-pointer hover:bg-stone-100 hover:border-stone-400 transition-colors" title="Upload a zip file">
+          <svg className="w-5 h-5 text-stone-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+          </svg>
           <input
             type="file"
             name="notes-zip"
@@ -206,7 +222,7 @@ export function ImportFlow({
               const file = e.target.files?.[0];
               if (file) handleNotesUpload(file);
             }}
-            className="mt-2 block w-full text-sm text-stone-700"
+            className="hidden"
           />
         </label>
         {error && <p className="mt-4 text-red-600 text-sm">{error}</p>}
@@ -257,9 +273,16 @@ export function ImportFlow({
   return (
     <div>
       <p className="mb-4 text-stone-600 text-sm leading-relaxed">
-        {info?.note_count ?? 0} notes uploaded. Review the proposed chapters
-        below — click to edit names or dates, then confirm.
+        {info?.note_count ?? 0} notes uploaded. Name your corpus, review the
+        proposed chapters, then confirm.
       </p>
+      <input
+        type="text"
+        value={corpusTitle}
+        onChange={(e) => setCorpusTitle(e.target.value)}
+        placeholder="Corpus name"
+        className="w-full mb-4 px-3 py-2 text-sm border border-stone-300 rounded bg-white focus:outline-none focus:border-stone-500"
+      />
       <ChapterEditor
         initial={proposedChapters}
         noteMonths={noteMonths}

@@ -26,18 +26,33 @@ function makeId(): string {
   return crypto.randomUUID();
 }
 
-/** Display YYYY-MM as MM-YYYY */
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** Display YYYY-MM as "MMM YYYY" (e.g. "Dec 2012") */
 function toDisplayDate(ym: string): string {
   if (!ym || ym === "0000-00") return ym;
   const [y, m] = ym.split("-");
-  return `${m}-${y}`;
+  const mi = parseInt(m, 10) - 1;
+  return `${MONTH_ABBR[mi] ?? m} ${y}`;
 }
 
-/** Parse MM-YYYY back to YYYY-MM for storage */
+/** Parse "MMM YYYY" back to YYYY-MM for storage */
 function fromDisplayDate(display: string): string {
   if (!display || display === "0000-00") return display;
-  const [m, y] = display.split("-");
-  return `${y}-${m}`;
+  const parts = display.trim().split(/[\s-]+/);
+  if (parts.length === 2) {
+    const mi = MONTH_ABBR.findIndex(
+      (a) => a.toLowerCase() === parts[0].toLowerCase(),
+    );
+    if (mi >= 0) return `${parts[1]}-${String(mi + 1).padStart(2, "0")}`;
+    // Fallback: try MM-YYYY
+    if (/^\d{2}$/.test(parts[0]) && /^\d{4}$/.test(parts[1]))
+      return `${parts[1]}-${parts[0]}`;
+  }
+  return display;
 }
 
 /** Given sorted chapters and a flat sorted list of note months,
@@ -93,9 +108,12 @@ export function ChapterEditor({
       cancelEdit();
       return;
     }
-    if (editingField === "start" && value !== "0000-00" && !/^\d{2}-\d{4}$/.test(value)) {
-      setValidationError("Start must be MM-YYYY format");
-      return;
+    if (editingField === "start" && value !== "0000-00") {
+      const parsed = fromDisplayDate(value);
+      if (!/^\d{4}-\d{2}$/.test(parsed)) {
+        setValidationError("Start must be like 'Dec 2012'");
+        return;
+      }
     }
     const storeValue = editingField === "start" ? fromDisplayDate(value) : value;
     setChapters((prev) => {
@@ -259,13 +277,13 @@ export function ChapterEditor({
                         if (e.key === "Enter") commitEdit();
                         if (e.key === "Escape") cancelEdit();
                       }}
-                      className="font-mono text-[11px] text-stone-500 border-b border-stone-400 bg-transparent outline-none px-0 py-0 w-20"
-                      placeholder="MM-YYYY"
+                      className="text-[11px] text-stone-500 border-b border-stone-400 bg-transparent outline-none px-0 py-0 w-20"
+                      placeholder="MMM YYYY"
                     />
                   ) : (
                     <button
                       onClick={() => startEdit(ch, "start")}
-                      className="font-mono text-[11px] text-stone-400 hover:text-stone-600"
+                      className="text-[11px] text-stone-400 hover:text-stone-600"
                       title="Click to edit start date"
                     >
                       from {toDisplayDate(ch.start)}

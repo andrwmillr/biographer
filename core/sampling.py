@@ -92,12 +92,20 @@ def folder_aware_sample(notes_in_era, top_n, corpus_id=None):
     return sampled
 
 
-def build_input(top_n, corpus_id=None):
-    """Assemble the corpus-overview + per-era sample input message used
-    as the user message for round-1 themes generation.
+def build_input(top_n, corpus_id=None, char_cap=None, label_filter=None,
+                exclude_rels=None, shuffle=False, return_notes=False):
+    """Assemble the corpus-overview + per-era sample input message.
 
     top_n is ignored for sampling (budget-proportional now) but kept in
-    the signature for backward compat with callers."""
+    the signature for backward compat with callers.
+
+    char_cap: override THEMES_CHAR_CAP (e.g. 500_000 for commonplace).
+    label_filter: if set, only include notes whose label (first path
+      segment) is in this set.
+    exclude_rels: set of note rel paths to skip (already-seen notes).
+    shuffle: if True, flatten all sampled notes and randomize order
+      instead of grouping by era chronologically."""
+    cap = char_cap or THEMES_CHAR_CAP
     notes = wb.load_corpus_notes(corpus_id)
     wb.apply_date_overrides(notes, corpus_id)
     wb.apply_note_metadata(notes, corpus_id)
@@ -105,6 +113,15 @@ def build_input(top_n, corpus_id=None):
 
     by_era: dict[str, list[dict]] = {}
     for n in notes:
+        # Apply label filter if specified (e.g. commonplace only wants
+        # journal, creative, poetry, letter, fiction).
+        if label_filter:
+            label = n["rel"].split("/", 1)[0] if "/" in n["rel"] else "_"
+            if label not in label_filter:
+                continue
+        # Skip already-seen notes (commonplace "deal from deck" mode).
+        if exclude_rels and n["rel"] in exclude_rels:
+            continue
         era = wb.era_of(n.get("date", ""), eras)
         if era:
             by_era.setdefault(era, []).append(n)
@@ -117,12 +134,12 @@ def build_input(top_n, corpus_id=None):
         if not era_notes:
             continue
         share = len(era_notes) / total_notes if total_notes else 0
-        era_budgets[name] = max(MIN_ERA_BUDGET, int(THEMES_CHAR_CAP * share))
+        era_budgets[name] = max(MIN_ERA_BUDGET, int(cap * share))
 
     # Scale budgets down if they overshoot (floor can push total above cap).
     budget_total = sum(era_budgets.values())
-    if budget_total > THEMES_CHAR_CAP:
-        scale = THEMES_CHAR_CAP / budget_total
+    if budget_total > cap:
+        scale = cap / budget_total
         era_budgets = {k: int(v * scale) for k, v in era_budgets.items()}
 
     sampled_by_era: dict[str, list[dict]] = {}
@@ -130,9 +147,11 @@ def build_input(top_n, corpus_id=None):
         era_notes = by_era.get(name, [])
         if not era_notes:
             continue
-        sampled_by_era[name] = budget_sample(
-            era_notes, era_budgets[name], corpus_id,
-        )
+        sampled = budget_sample(era_notes, era_budgets[name], corpus_id)
+        # Tag each note with its era name so shuffle mode can include it.
+        for n in sampled:
+            n["era"] = name
+        sampled_by_era[name] = sampled
 
     total_sampled = sum(len(ns) for ns in sampled_by_era.values())
     total_body = sum(len(n["body"]) for ns in sampled_by_era.values() for n in ns)
@@ -167,19 +186,47 @@ def build_input(top_n, corpus_id=None):
         f"different notes."
     )
     lines.append("")
-    for name, _, _ in eras:
-        sampled = sampled_by_era.get(name)
-        if not sampled:
-            continue
-        era_total = len(by_era.get(name, []))
-        lines.append(f"### {name} — {len(sampled)} of {era_total} notes")
-        lines.append("")
-        for n in sampled:
+
+    ordered_notes: list[dict] = []
+    if shuffle:
+        # Flatten all sampled notes and randomize — no era grouping.
+        all_sampled = [
+            n for ns in sampled_by_era.values() for n in ns
+        ]
+        random.shuffle(all_sampled)
+        ordered_notes = all_sampled
+        for n in all_sampled:
             date = (n.get("date") or "")[:10]
             title = n.get("title") or "(untitled)"
-            label = n["rel"].split("/", 1)[0]
-            lines.append(f"==== [{date}] · {label} · {title} ====")
+            era = n.get("era", "")
+            lines.append(f"==== [{date}] · {era} · {title} ====")
             lines.append("")
             lines.append(n["body"])
             lines.append("")
-    return "\n".join(lines)
+    else:
+        for name, _, _ in eras:
+            sampled = sampled_by_era.get(name)
+            if not sampled:
+                continue
+            era_total = len(by_era.get(name, []))
+            lines.append(f"### {name} — {len(sampled)} of {era_total} notes")
+            lines.append("")
+            for n in sampled:
+                date = (n.get("date") or "")[:10]
+                title = n.get("title") or "(untitled)"
+                label = n["rel"].split("/", 1)[0]
+                lines.append(f"==== [{date}] · {label} · {title} ====")
+                lines.append("")
+                lines.append(n["body"])
+                lines.append("")
+            ordered_notes.extend(sampled)
+    text = "\n".join(lines)
+    # Collect rels of all sampled notes (for "seen" tracking).
+    sampled_rels = [
+        n["rel"]
+        for ns in sampled_by_era.values()
+        for n in ns
+    ]
+    if return_notes:
+        return text, sampled_rels, ordered_notes
+    return text, sampled_rels

@@ -8,6 +8,7 @@ import {
 } from "react-resizable-panels";
 import { Markdown, formatTool } from "./markdown";
 import { NotesTimeline } from "./NotesTimeline";
+import { SpotifyPlayer } from "./SpotifyPlayer";
 import { authHeaders, getAuthToken, getSession } from "./auth";
 import type {
   FinalizedInfo,
@@ -238,7 +239,11 @@ export function ChatWorkspace({
     const url =
       scope.kind === "era"
         ? `${apiBase}/chapters/${encodeURIComponent(scope.era)}`
-        : `${apiBase}/themes/latest`;
+        : scope.kind === "preface"
+          ? `${apiBase}/preface/latest`
+          : scope.kind === "commonplace"
+            ? `${apiBase}/commonplace/latest`
+            : `${apiBase}/themes/latest`;
     fetch(url, { headers: authHeaders() })
       .then(async (r) => {
         if (!r.ok) return null;
@@ -361,7 +366,11 @@ export function ChatWorkspace({
     setPhase("generating");
     setWsStatus("connecting");
 
-    const wsPath = scope.kind === "era" ? "/session" : "/themes-curate";
+    const wsPath =
+      scope.kind === "era" ? "/session"
+        : scope.kind === "preface" ? "/preface-session"
+          : scope.kind === "commonplace" ? "/commonplace-session"
+            : "/themes-curate";
     // Auth + session travel in the first message body, not the URL —
     // keeps tokens out of access logs / browser history / proxy logs.
     const ws = new WebSocket(`${wsBase}${wsPath}`);
@@ -390,7 +399,9 @@ export function ChatWorkspace({
       const startMsg =
         scope.kind === "era"
           ? { ...base, era: scope.era, future: ERA_INCLUDE_FUTURE }
-          : { ...base, top_n: THEMES_TOP_N };
+          : scope.kind === "themes"
+            ? { ...base, top_n: THEMES_TOP_N }
+            : base;
       ws.send(JSON.stringify(startMsg));
       lastPongRef.current = Date.now();
       pingTimer = setInterval(() => {
@@ -421,6 +432,11 @@ export function ChatWorkspace({
       if (t === "spawned") {
         const info = payload as SpawnedInfo;
         setSpawned(info);
+        // The agent is now live — promote from "connecting" so the
+        // progress counter and elapsed timer activate immediately,
+        // rather than waiting for the SDK's delayed "generating" event
+        // (which can lag during extended thinking).
+        setWsStatus((s) => (s === "connecting" ? "generating" : s));
         // Persist run_dir for resume on reconnect.
         if (info.run_dir) {
           runIdRef.current = info.run_dir;
@@ -435,7 +451,11 @@ export function ChatWorkspace({
               ((info.future_chapters ?? 0) > 0
                 ? ` + ${info.future_chapters} future chapter${info.future_chapters === 1 ? "" : "s"}`
                 : "")
-            : `reading top-${info.top_n ?? THEMES_TOP_N} per era`;
+            : scope.kind === "preface"
+              ? `reading all chapters + themes + cited source notes`
+              : scope.kind === "commonplace"
+                ? `reading ${info.sampled_count ?? 0} unseen notes (${info.seen_before ?? 0} already processed)`
+                : `reading top-${info.top_n ?? THEMES_TOP_N} per era`;
         setLog((l) => [...l, { kind: "status", text: summary }]);
       } else if (t === "narration") {
         narrationBufRef.current += payload.text;
@@ -471,9 +491,11 @@ export function ChatWorkspace({
         );
       } else if (t === "draft_update") {
         const interesting =
-          (scope.kind === "era" && payload.kind === "output") ||
+          ((scope.kind === "era" || scope.kind === "preface") && payload.kind === "output") ||
           (scope.kind === "themes" &&
-            (payload.kind === "output" || payload.kind === "themes"));
+            (payload.kind === "output" || payload.kind === "themes")) ||
+          (scope.kind === "commonplace" &&
+            (payload.kind === "output" || payload.kind === "commonplace"));
         if (interesting) {
           setDraft(payload.content);
           if (!autoSwitchedToDraftRef.current) {
@@ -662,7 +684,11 @@ export function ChatWorkspace({
       promptStatus === "pre-gen"
         ? scope.kind === "era"
           ? "Press ▶ to start drafting this chapter. The agent reads notes then proposes ideas for you to respond to."
-          : "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
+          : scope.kind === "preface"
+            ? "Press ▶ to draft the preface. The agent reads all chapters and proposes framings for you to choose from."
+            : scope.kind === "commonplace"
+              ? "Press ▶ to find the good stuff. The agent reads unseen notes and extracts standout passages."
+              : "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
         : promptStatus === "generating"
           ? "thinking…"
           : promptStatus === "finalized"
@@ -900,6 +926,13 @@ export function ChatWorkspace({
             <div className="px-6 pt-2 pb-3 text-center font-serif text-lg text-stone-800">
               {draftHeaderSlot}
             </div>
+            {scope.kind === "era" && (
+              <SpotifyPlayer
+                apiBase={apiBase}
+                eraStart={scope.eraStart}
+                eraEnd={scope.eraEnd}
+              />
+            )}
             <div className="mx-[11px] h-px bg-[linear-gradient(to_right,transparent_0%,#d6d3d1_6%,#d6d3d1_94%,transparent_100%)]" />
           </div>
         )}

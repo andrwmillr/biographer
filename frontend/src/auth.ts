@@ -6,6 +6,7 @@
 
 const SESSION_KEY = "corpusSession";
 const AUTH_TOKEN_KEY = "authToken";
+const CORPUS_SECRET_KEY = "corpusSecret";
 
 export function getSession(): string | null {
   return localStorage.getItem(SESSION_KEY);
@@ -31,11 +32,21 @@ export function clearAuthToken(): void {
   localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
+export function getCorpusSecret(): string | null {
+  return localStorage.getItem(CORPUS_SECRET_KEY);
+}
+
+export function setCorpusSecret(secret: string): void {
+  localStorage.setItem(CORPUS_SECRET_KEY, secret);
+}
+
 export function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const slug = getSession();
   if (slug) headers["X-Corpus-Session"] = slug;
   const token = getAuthToken();
   if (token) headers["X-Auth-Token"] = token;
+  const secret = getCorpusSecret();
+  if (secret) headers["X-Corpus-Secret"] = secret;
   return headers;
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChapterEditor, type ChapterDraft } from "./ChapterEditor";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { CommonplaceWorkspace } from "./CommonplaceWorkspace";
 import { EraTab } from "./EraTab";
 import { HeaderMenu } from "./HeaderMenu";
 import { ImportFlow, type CorpusInfo, type Sample } from "./ImportFlow";
@@ -9,8 +10,10 @@ import {
   clearAuthToken,
   clearSession,
   getAuthToken,
+  getCorpusSecret,
   getSession,
   setAuthToken,
+  setCorpusSecret,
   setSession,
 } from "./auth";
 import type { Era } from "./types";
@@ -46,11 +49,11 @@ function formatEraRange(start: string | null, end: string | null): string {
 export default function App() {
   const [error, setError] = useState<string>("");
   const [magicLinkLanded, setMagicLinkLanded] = useState(false);
-  const [viewMode, _setViewMode] = useState<"eras" | "themes">(() => {
+  const [viewMode, _setViewMode] = useState<"eras" | "themes" | "commonplace">(() => {
     const stored = localStorage.getItem("viewMode");
-    return stored === "eras" ? "eras" : "themes";
+    return stored === "eras" ? "eras" : stored === "commonplace" ? "commonplace" : "themes";
   });
-  const setViewMode = (v: "eras" | "themes") => {
+  const setViewMode = (v: "eras" | "themes" | "commonplace") => {
     _setViewMode(v);
     localStorage.setItem("viewMode", v);
   };
@@ -213,12 +216,12 @@ export default function App() {
     }
   }
 
-  // Best-effort fetch of the samples list. Open without auth, so we can
-  // show the cards on both login and picker screens. Failures are silent —
-  // the cards just don't render.
   async function refreshSamples(): Promise<void> {
     try {
-      const r = await fetch(`${API_BASE}/samples`);
+      const headers: Record<string, string> = {};
+      const secret = getCorpusSecret();
+      if (secret) headers["X-Corpus-Secret"] = secret;
+      const r = await fetch(`${API_BASE}/samples`, { headers });
       if (!r.ok) return;
       setSamples((await r.json()) as Sample[]);
     } catch {
@@ -285,6 +288,27 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (corpusMode !== "picker") return;
+    refreshSamples();
+    const TARGET = (import.meta.env.VITE_EASTER_EGG_TRIGGER || "").toLowerCase();
+    const SECRET = import.meta.env.VITE_CORPUS_SECRET || "";
+    if (!TARGET || !SECRET) return;
+    let buffer = "";
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      buffer += e.key.toLowerCase();
+      if (buffer.length > TARGET.length) buffer = buffer.slice(-TARGET.length);
+      if (buffer === TARGET) {
+        buffer = "";
+        setCorpusSecret(SECRET);
+        refreshSamples();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [corpusMode]);
+
   // Cross-tab auth: when the magic link opens in a new tab, it writes
   // authToken to localStorage. The `storage` event fires in THIS tab,
   // so we can re-bootstrap without the user having to manually switch
@@ -336,6 +360,7 @@ export default function App() {
     }
     clearAuthToken();
     clearSession();
+    localStorage.removeItem("corpusSecret");
     setCorpusInfo(null);
     setUserEmail(null);
     setUserCorpora([]);
@@ -471,32 +496,41 @@ export default function App() {
   // path. Rendered on both the login and picker screens.
   function renderSamples(label: string) {
     if (!samples.length) return null;
+    const main = samples.filter((s) => s.slug !== "poems");
+    const bonus = samples.filter((s) => s.slug === "poems");
+    function sampleCard(s: Sample) {
+      return (
+        <button
+          key={s.slug}
+          onClick={() => handlePickCorpus(s.slug)}
+          className="w-full rounded border border-stone-200 bg-white px-4 py-3 text-left hover:bg-stone-100 flex flex-col"
+        >
+          <div className="font-serif text-sm text-stone-800">{s.title}</div>
+          {s.description && (
+            <div className="mt-1 text-xs leading-relaxed text-stone-500 flex-1">
+              {s.description}
+            </div>
+          )}
+          <div className="mt-1 font-mono text-[10px] text-stone-400">
+            {s.note_count.toLocaleString()} entries
+            {s.era_count > 0 && <> · {s.era_count} era{s.era_count === 1 ? "" : "s"}</>}
+          </div>
+        </button>
+      );
+    }
     return (
-      <div className="mt-8 border-t border-stone-200 pt-6">
+      <div className="mt-8 border-t border-stone-200 pt-6 w-[150%] -ml-[25%]">
         <p className="mb-3 text-xs uppercase tracking-wider text-stone-500">
           {label}
         </p>
-        <ul className="space-y-2">
-          {samples.map((s) => (
-            <li key={s.slug}>
-              <button
-                onClick={() => handlePickCorpus(s.slug)}
-                className="w-full rounded border border-stone-200 bg-white px-4 py-3 text-left hover:bg-stone-100"
-              >
-                <div className="font-serif text-sm text-stone-800">{s.title}</div>
-                {s.description && (
-                  <div className="mt-1 text-xs leading-relaxed text-stone-500">
-                    {s.description}
-                  </div>
-                )}
-                <div className="mt-1 font-mono text-[10px] text-stone-400">
-                  {s.note_count.toLocaleString()} entries · {s.era_count} era
-                  {s.era_count === 1 ? "" : "s"}
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="grid grid-cols-2 gap-2">
+          {main.map(sampleCard)}
+        </div>
+        {bonus.length > 0 && (
+          <div className="mt-2 flex justify-center">
+            <div className="w-1/2">{bonus.map(sampleCard)}</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -769,6 +803,30 @@ export default function App() {
                         role="menu"
                         className="absolute left-0 top-full z-20 mt-1 min-w-[20rem] rounded border border-stone-200 bg-white py-1 shadow-md"
                       >
+                        {(() => {
+                          const allHaveChapters = eras.filter(e => e.note_count > 0).every(e => e.has_chapter);
+                          return (
+                            <button
+                              role="menuitem"
+                              disabled={!allHaveChapters}
+                              onClick={() => {
+                                setSelectedEra("__preface__");
+                                setChaptersOpen(false);
+                              }}
+                              className={
+                                "block w-full px-3 py-1.5 text-left font-serif text-sm transition-colors " +
+                                (!allHaveChapters
+                                  ? "text-stone-300 cursor-not-allowed"
+                                  : selectedEra === "__preface__"
+                                    ? "text-stone-900 font-semibold"
+                                    : "text-stone-700 hover:bg-stone-50")
+                              }
+                              title={allHaveChapters ? undefined : "Draft all chapters first"}
+                            >
+                              Preface
+                            </button>
+                          );
+                        })()}
                         {eras.map((e) => {
                           const range = formatEraRange(e.start, e.end);
                           const disabled = e.note_count === 0;
@@ -808,6 +866,17 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  <button
+                    className={
+                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                      (viewMode === "commonplace"
+                        ? "text-stone-700 border-b-2 border-stone-700"
+                        : "text-stone-400 hover:text-stone-700")
+                    }
+                    onClick={() => setViewMode("commonplace")}
+                  >
+                    Highlights
+                  </button>
                 </div>
               </div>
               {(corpusInfo.title || corpusInfo.slug) && (
@@ -870,6 +939,14 @@ export default function App() {
               model={model}
               models={MODELS.filter((m) => m !== "opus-4.7")}
               onModelChange={(m) => setModel(m as (typeof MODELS)[number])}
+            />
+          </div>
+          <div className={viewMode === "commonplace" ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
+            <CommonplaceWorkspace
+              apiBase={API_BASE}
+              wsBase={WS_BASE}
+              model={model}
+              readOnly={corpusInfo?.slug === "poems"}
             />
           </div>
           {chapterEditorOpen && (

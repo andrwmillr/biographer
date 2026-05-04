@@ -142,7 +142,7 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Building input (top-{top_n} per era, folder-aware)...", file=sys.stderr)
-    user_msg = build_input(top_n)
+    user_msg, _ = build_input(top_n)
     in_path = OUT_DIR / "input.md"
     in_path.write_text(user_msg, encoding="utf-8")
     print(f"Wrote input ({len(user_msg):,} chars) to {in_path}", file=sys.stderr)

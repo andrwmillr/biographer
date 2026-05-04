@@ -35,7 +35,7 @@ from api import config  # noqa: F401, E402  — must precede other api/core impo
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from api import auth, chapters, corpora, drafts, imports, themes  # noqa: E402
+from api import auth, chapters, commonplace, corpora, drafts, imports, spotify, themes  # noqa: E402
 from core.session import all_sessions, gc_loop  # noqa: E402
 from core.telemetry import log as tlog  # noqa: E402
 
@@ -118,3 +118,5 @@ app.include_router(imports.router)
 app.include_router(chapters.router)
 app.include_router(drafts.router)
 app.include_router(themes.router)
+app.include_router(spotify.router)
+app.include_router(commonplace.router)

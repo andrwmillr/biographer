@@ -57,13 +57,30 @@ def is_sample_corpus(slug: str) -> bool:
     return bool(meta.get("sample"))
 
 
+def _get_corpus_secret(slug: str) -> str | None:
+    """Return the secret key for a corpus if one is configured, else None."""
+    meta_path = config.CORPORA_ROOT / slug / "_meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return meta.get("secret") or None
+
+
 def require_corpus_access(
     session: str = Depends(get_session),
     auth_email: str | None = Depends(get_auth_optional),
+    x_corpus_secret: str | None = Header(None),
 ) -> str:
-    """Gate on (auth token, corpus ownership). Sample corpora are
-    readable without auth. Every other corpus session requires an
-    X-Auth-Token whose user owns the slug."""
+    """Gate on (secret key) OR (sample corpus) OR (auth token + ownership).
+    Secret-protected corpora return 404 without the key (no existence leak)."""
+    corpus_secret = _get_corpus_secret(session)
+    if corpus_secret:
+        if x_corpus_secret == corpus_secret:
+            return session
+        raise HTTPException(404, "not found")
     if is_sample_corpus(session):
         return session
     if auth_email is None:
@@ -76,8 +93,8 @@ def require_corpus_access(
 
 def require_writable(session: str = Depends(require_corpus_access)) -> str:
     """Gate destructive / compute-spending operations. Sample corpora are
-    read-only — no eras replacement, no wipe. (Drafting on samples is
-    explicitly allowed via a bypass in the /session WS handler.)"""
+    read-only — no eras replacement, no wipe. Secret-protected corpora
+    allow writes (the secret itself is the gate)."""
     if is_sample_corpus(session):
         raise HTTPException(403, "sample corpora are read-only")
     return session
@@ -86,7 +103,11 @@ def require_writable(session: str = Depends(require_corpus_access)) -> str:
 def corpus_dir(session: str) -> Path:
     """Resolve a session string to its on-disk corpus directory.
     Raises 401 for invalid / nonexistent sessions."""
-    if session != "andrew" and not re.fullmatch(r"c_[0-9a-f]{16}", session):
+    if (
+        session != "andrew"
+        and session != "poems"
+        and not re.fullmatch(r"c_[0-9a-f]{16}", session)
+    ):
         raise HTTPException(401, "invalid session")
     candidate = config.CORPORA_ROOT / session
     try:
@@ -249,23 +270,33 @@ def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)
 
 
 @router.get("/samples")
-def list_samples(request: Request):
+def list_samples(request: Request, x_corpus_secret: str | None = Header(None)):
     """List all sample corpora (any `_corpora/<slug>/_meta.json` with
     `"sample": true`). Open without auth — visitors can pick a sample
-    slug to set as their corpusSession and browse it read-only."""
+    slug to set as their corpusSession and browse it read-only.
+    Also includes secret-protected corpora when the matching secret is
+    provided via X-Corpus-Secret header."""
     ip = request.headers.get("cf-connecting-ip") or request.client.host
     tlog("page_view", page="samples", ip=ip)
     out = []
     if not config.CORPORA_ROOT.exists():
         return out
     for d in sorted(config.CORPORA_ROOT.iterdir()):
-        if not d.is_dir() or not is_sample_corpus(d.name):
+        if not d.is_dir():
             continue
         meta_path = d / "_meta.json"
+        if not meta_path.exists():
+            continue
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        # Include if: sample corpus, OR secret-protected with matching key
+        is_sample = bool(meta.get("sample"))
+        corpus_secret = meta.get("secret")
+        if not is_sample:
+            if not corpus_secret or x_corpus_secret != corpus_secret:
+                continue
         eras_yaml_path = d / "_config" / "eras.yaml"
         era_count = 0
         if eras_yaml_path.exists():
@@ -324,7 +355,7 @@ def get_corpus(session: str = Depends(require_corpus_access)):
     return {
         "slug": session,
         "title": title,
-        "is_sample": is_sample_corpus(session),
+        "is_sample": is_sample_corpus(session) or bool(_get_corpus_secret(session)),
         "note_count": note_count,
         "has_eras": has_eras,
         "eras": eras,

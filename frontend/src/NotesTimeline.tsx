@@ -38,6 +38,8 @@ type NotesTimelineProps = {
   notes: Note[];
   loading: boolean;
   emptyHint?: string;
+  /** Called when the user clicks a note in the timeline. */
+  onSelect?: (note: Note) => void;
   /** When set, selects the matching note (by date) and brings it into view. */
   highlightDate?: string;
 };
@@ -49,6 +51,7 @@ export function NotesTimeline({
   notes,
   loading,
   emptyHint,
+  onSelect,
   highlightDate,
 }: NotesTimelineProps) {
   const [selected, setSelected] = useState<Note | null>(null);
@@ -245,7 +248,7 @@ export function NotesTimeline({
                               return (
                                 <button
                                   key={n.rel}
-                                  onClick={() => setSelected(n)}
+                                  onClick={() => { setSelected(n); onSelect?.(n); }}
                                   className={
                                     "text-[12px] leading-[18px] text-left max-w-full truncate hover:text-stone-900 " +
                                     (isSelected

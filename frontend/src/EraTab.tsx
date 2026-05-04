@@ -49,6 +49,23 @@ export function EraTab({
     );
   }
 
+  // Preface mode: special scope, no era-specific data needed.
+  if (selectedEra === "__preface__") {
+    return (
+      <ChatWorkspace
+        key="__preface__"
+        apiBase={apiBase}
+        wsBase={wsBase}
+        scope={{ kind: "preface" }}
+        model={model}
+        models={models}
+        onModelChange={onModelChange}
+        onFinalized={onChapterFinalized}
+        draftHeaderSlot={<>Preface</>}
+      />
+    );
+  }
+
   const era = eras.find((e) => e.name === selectedEra) ?? eras[0];
 
   if (era.note_count === 0) {
@@ -76,7 +93,7 @@ export function EraTab({
       key={era.name}
       apiBase={apiBase}
       wsBase={wsBase}
-      scope={{ kind: "era", era: era.name }}
+      scope={{ kind: "era", era: era.name, eraStart: era.start, eraEnd: era.end }}
       model={model}
       models={models}
       onModelChange={onModelChange}

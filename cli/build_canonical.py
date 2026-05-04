@@ -166,7 +166,7 @@ def build_themes(corpus_id: str) -> None:
     curate = CURATE_PROMPT.read_text(encoding="utf-8").replace("__SUBJECT__", subject)
 
     # Round-1: corpus sample → ~10 candidate themes.
-    corpus_sample = build_input(top_n=5, corpus_id=corpus_id)
+    corpus_sample, _ = build_input(top_n=5, corpus_id=corpus_id)
     log(f"  themes round-1: {len(corpus_sample):,} chars in")
     round1 = claude_p(themes_r1, corpus_sample).strip()
     log(f"    round-1 produced {len(round1):,} chars ({len(round1.split())} words)")
