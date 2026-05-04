@@ -363,6 +363,25 @@ async def themes_curate(ws: WebSocket):
                     state_path.write_text(text, encoding="utf-8")
                 except Exception:
                     pass
+                # Belt-and-suspenders promotion: if finalize_pending is
+                # still True when the agent's turn ends, the file watcher
+                # didn't catch an mtime change (agent may not have re-written
+                # themes.md via the Write tool). Promote directly.
+                if session and session.finalize_pending:
+                    session.finalize_pending = False
+                    themes_file = run_dir_abs / "themes.md"
+                    if themes_file.is_file():
+                        try:
+                            result = _promote_themes(run_dir_abs, corpus_id)
+                            await session.emit({
+                                "type": "finalized",
+                                "content": result["content"],
+                                "location": result["location"],
+                                "words": result["words"],
+                                "overwritten": result["overwritten"],
+                            })
+                        except Exception:
+                            pass
 
             session = await create_session(
                 run_id=run_rel,

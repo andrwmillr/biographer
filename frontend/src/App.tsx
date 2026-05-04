@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChapterEditor, type ChapterDraft } from "./ChapterEditor";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { EraTab } from "./EraTab";
@@ -98,6 +98,9 @@ export default function App() {
       return next;
     });
   };
+  // Stable reference so ChatWorkspace's scope-dependent effects don't
+  // re-fire on every App render (object literals fail Object.is checks).
+  const themesScope = useMemo(() => ({ kind: "themes" as const }), []);
   const [chaptersOpen, setChaptersOpen] = useState<boolean>(false);
   const chaptersMenuRef = useRef<HTMLDivElement | null>(null);
   const [chapterEditorOpen, setChapterEditorOpen] = useState(false);
@@ -854,7 +857,7 @@ export default function App() {
               selectedEra={selectedEra}
               model={model}
               models={MODELS}
-              onModelChange={setModel}
+              onModelChange={(m) => setModel(m as (typeof MODELS)[number])}
               onChapterFinalized={reloadEras}
             />
           </div>
@@ -863,10 +866,10 @@ export default function App() {
               key="themes"
               apiBase={API_BASE}
               wsBase={WS_BASE}
-              scope={{ kind: "themes" }}
+              scope={themesScope}
               model={model}
               models={MODELS.filter((m) => m !== "opus-4.7")}
-              onModelChange={setModel}
+              onModelChange={(m) => setModel(m as (typeof MODELS)[number])}
             />
           </div>
           {chapterEditorOpen && (

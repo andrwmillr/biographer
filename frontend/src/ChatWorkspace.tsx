@@ -247,7 +247,9 @@ export function ChatWorkspace({
       .then((data) => {
         if (cancelled || !data?.content) return;
         setCanonicalDraft(data.content);
-        setDraft(data.content);
+        // Only seed draft on mount — don't clobber a working draft from
+        // a live session if this effect re-fires (e.g. scope ref change).
+        setDraft((prev) => prev || data.content);
       })
       .catch(() => {});
     return () => {

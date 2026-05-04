@@ -315,6 +315,9 @@ export function NotesTimeline({
                 {selected.body ? (
                   <Markdown
                     content={selected.body
+                      // Strip leading tabs — markdown renders them as
+                      // code blocks. Common in Apple Notes fiction.
+                      .replace(/^\t+/gm, "")
                       // Escape setext heading triggers: a line of only
                       // dashes/equals turns the preceding paragraph into
                       // an <h1>/<h2>. Prefix with a zero-width space.
