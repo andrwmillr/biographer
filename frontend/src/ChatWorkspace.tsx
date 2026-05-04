@@ -22,9 +22,13 @@ type ChatWorkspaceProps = {
   apiBase: string;
   wsBase: string;
   scope: WorkspaceScope;
-  // Model selected in the global header. Owned by App.tsx so it survives
+  // Model selected for new sessions. Owned by App.tsx so it survives
   // chapter remounts and is shared across views.
   model: string;
+  // Available model choices. Scope-specific filtering (e.g. no opus-4.7
+  // for themes) is handled by the caller.
+  models: readonly string[];
+  onModelChange: (m: string) => void;
   // Called when the server emits `finalized` — used by the eras tab to
   // refetch the era list so chapter date ranges update after a draft is
   // promoted.
@@ -61,7 +65,7 @@ const PANE_DEFAULT_SIZE: Record<PaneId, number> = {
 // Defaults baked into the protocol — these used to be exposed as user-
 // adjustable controls in the now-removed control bar but never had a
 // real reason to vary per-session.
-const THEMES_TOP_N = 5;
+const THEMES_TOP_N = 7;
 const ERA_INCLUDE_FUTURE = true;
 
 export function ChatWorkspace({
@@ -69,9 +73,15 @@ export function ChatWorkspace({
   wsBase,
   scope,
   model,
+  models,
+  onModelChange,
   onFinalized,
   draftHeaderSlot,
 }: ChatWorkspaceProps) {
+  // Resolve model: if the current selection isn't in this scope's allowed
+  // list (e.g. opus-4.7 on themes), fall back to the first available.
+  const effectiveModel = models.includes(model) ? model : models[0];
+
   const [phase, setPhase] = useState<Phase>("pre-gen");
 
   const [notes, setNotes] = useState<Note[]>([]);
@@ -80,16 +90,23 @@ export function ChatWorkspace({
 
   const [log, setLog] = useState<LogItem[]>([]);
   const [draft, setDraft] = useState<string>("");
-  const [replyText, setReplyText] = useState<string>("");
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
+  const [replyHasText, setReplyHasText] = useState(false);
   const [wsStatus, setWsStatus] = useState<WSStatus>("idle");
   const [spawned, setSpawned] = useState<SpawnedInfo | null>(null);
   const [cost, setCost] = useState<number>(0);
   const [error, setError] = useState<string>("");
   const [finalized, setFinalized] = useState<FinalizedInfo | null>(null);
   const [canonicalDraft, setCanonicalDraft] = useState<string>("");
-  const [draftView, setDraftView] = useState<"canonical" | "working">(
-    "canonical",
-  );
+  const draftViewKey = `draftView:${scope.kind}`;
+  const [draftView, _setDraftView] = useState<"canonical" | "working">(() => {
+    const stored = sessionStorage.getItem(draftViewKey);
+    return stored === "working" ? "working" : "canonical";
+  });
+  const setDraftView = (v: "canonical" | "working") => {
+    _setDraftView(v);
+    sessionStorage.setItem(draftViewKey, v);
+  };
   const [sessionStartedOnce, setSessionStartedOnce] = useState(false);
   const [highlightDate, setHighlightDate] = useState<string>("");
 
@@ -325,7 +342,8 @@ export function ChatWorkspace({
       setSessionStartedOnce(true);
       autoSwitchedToDraftRef.current = false;
     }
-    setReplyText("");
+    if (replyRef.current) replyRef.current.value = "";
+    setReplyHasText(false);
     draftAutoExpandedRef.current = false;
     setSpawned(null);
     setCost(0);
@@ -360,7 +378,7 @@ export function ChatWorkspace({
     ws.onopen = () => {
       const session = getSession() || "";
       const token = getAuthToken() || "";
-      const base: Record<string, unknown> = { type: "start", session, token, model };
+      const base: Record<string, unknown> = { type: "start", session, token, model: effectiveModel };
       if (resuming) {
         base.resume = true;
         base.run_id = opts.resumeRunId;
@@ -515,10 +533,12 @@ export function ChatWorkspace({
 
   function sendReply() {
     const ws = wsRef.current;
-    const text = replyText.trim();
+    const ta = replyRef.current;
+    const text = (ta?.value ?? "").trim();
     if (!ws || !text || wsStatus !== "awaiting_reply") return;
     ws.send(JSON.stringify({ type: "reply", text }));
-    setReplyText("");
+    if (ta) ta.value = "";
+    setReplyHasText(false);
     setWsStatus("generating");
   }
 
@@ -562,7 +582,8 @@ export function ChatWorkspace({
     setPhase("pre-gen");
     setSpawned(null);
     setFinalized(null);
-    setReplyText("");
+    if (replyRef.current) replyRef.current.value = "";
+    setReplyHasText(false);
     setError("");
     setWsElapsed(0);
     sawFirstAwaitingRef.current = false;
@@ -634,7 +655,7 @@ export function ChatWorkspace({
     const enabled = promptStatus === "awaiting_reply";
     const buttonEnabled =
       promptStatus === "pre-gen" ||
-      (promptStatus === "awaiting_reply" && replyText.trim().length > 0);
+      (promptStatus === "awaiting_reply" && replyHasText);
     const placeholder =
       promptStatus === "pre-gen"
         ? scope.kind === "era"
@@ -656,18 +677,21 @@ export function ChatWorkspace({
     return (
       <div className="relative">
         <textarea
+          ref={replyRef}
           name="reply"
           className={
             "block w-full resize-none rounded border px-3 pt-2 pb-11 text-sm font-sans transition-colors disabled:text-stone-400 " +
             borderClass
           }
           rows={3}
-          value={replyText}
           placeholder={placeholder}
           disabled={!enabled}
-          onChange={(e) => setReplyText(e.target.value)}
+          onChange={(e) => {
+            const has = e.target.value.trim().length > 0;
+            if (has !== replyHasText) setReplyHasText(has);
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && replyText.trim()) {
+            if (e.key === "Enter" && !e.shiftKey && (replyRef.current?.value ?? "").trim()) {
               e.preventDefault();
               sendReply();
             }
@@ -930,6 +954,24 @@ export function ChatWorkspace({
             </span>
           )}
         </span>
+        {id === "chat" && (
+          <select
+            className="appearance-none bg-transparent border-0 border-b border-dotted border-stone-300 hover:border-stone-500 focus:border-stone-700 focus:outline-none pl-1 pr-5 py-0.5 font-sans text-[10px] text-stone-400 hover:text-stone-600 cursor-pointer tabular-nums"
+            style={{
+              backgroundImage:
+                "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23a8a29e' stroke-width='1.2' d='M1 1l4 4 4-4'/%3E%3C/svg%3E\")",
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 2px center",
+            }}
+            value={effectiveModel}
+            onChange={(e) => onModelChange(e.target.value)}
+            title="Model used for new sessions"
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        )}
         {id === "draft" && showDraftToggle && (
           <div className="flex items-center gap-1 text-[10px] font-sans">
             <button

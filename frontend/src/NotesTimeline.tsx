@@ -67,14 +67,21 @@ export function NotesTimeline({
     const match = notes.find((n) => n.date.slice(0, 10) === highlightDate);
     if (match) {
       setSelected(match);
-      // Scroll the timeline to bring the selected group into view.
+      // Scroll the timeline to center the selected group. Can't use
+      // scrollIntoView — the items are absolutely positioned inside a
+      // relative container, so we compute the offset manually.
       requestAnimationFrame(() => {
-        const el = timelineScrollRef.current;
-        if (!el) return;
-        const target = el.querySelector(`[data-date="${highlightDate}"]`);
-        if (target) {
-          target.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
+        const container = timelineScrollRef.current;
+        if (!container) return;
+        const target = container.querySelector(`[data-date="${highlightDate}"]`) as HTMLElement | null;
+        if (!target) return;
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const offset = targetRect.top - containerRect.top + container.scrollTop;
+        container.scrollTo({
+          top: offset - container.clientHeight / 2,
+          behavior: "smooth",
+        });
       });
     }
   }, [highlightDate, notes]);

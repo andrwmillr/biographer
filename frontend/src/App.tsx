@@ -822,25 +822,6 @@ export default function App() {
                 </button>
               )}
               <div className="flex flex-1 items-center justify-end gap-3 min-w-0">
-                <select
-                  name="model"
-                  className="appearance-none bg-transparent border-0 border-b border-dotted border-stone-300 hover:border-stone-500 focus:border-stone-700 focus:outline-none pl-1 pr-5 py-0.5 font-sans text-xs text-stone-500 hover:text-stone-700 cursor-pointer tabular-nums"
-                  style={{
-                    backgroundImage:
-                      "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23a8a29e' stroke-width='1.2' d='M1 1l4 4 4-4'/%3E%3C/svg%3E\")",
-                    backgroundRepeat: "no-repeat",
-                    backgroundPosition: "right 2px center",
-                  }}
-                  value={model}
-                  onChange={(e) => setModel(e.target.value as (typeof MODELS)[number])}
-                  title="Model used for new sessions"
-                >
-                  {MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
                 <HeaderMenu
                   isSample={corpusInfo.is_sample}
                   userEmail={userEmail}
@@ -872,6 +853,8 @@ export default function App() {
               eras={eras}
               selectedEra={selectedEra}
               model={model}
+              models={MODELS}
+              onModelChange={setModel}
               onChapterFinalized={reloadEras}
             />
           </div>
@@ -882,6 +865,8 @@ export default function App() {
               wsBase={WS_BASE}
               scope={{ kind: "themes" }}
               model={model}
+              models={MODELS.filter((m) => m !== "opus-4.7")}
+              onModelChange={setModel}
             />
           </div>
           {chapterEditorOpen && (

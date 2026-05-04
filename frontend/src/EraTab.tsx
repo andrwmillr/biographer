@@ -26,6 +26,8 @@ type EraTabProps = {
   eras: Era[];
   selectedEra: string | null;
   model: string;
+  models: readonly string[];
+  onModelChange: (m: string) => void;
   onChapterFinalized: () => void;
 };
 
@@ -35,6 +37,8 @@ export function EraTab({
   eras,
   selectedEra,
   model,
+  models,
+  onModelChange,
   onChapterFinalized,
 }: EraTabProps) {
   if (!eras.length) {
@@ -74,6 +78,8 @@ export function EraTab({
       wsBase={wsBase}
       scope={{ kind: "era", era: era.name }}
       model={model}
+      models={models}
+      onModelChange={onModelChange}
       onFinalized={onChapterFinalized}
       draftHeaderSlot={eraLabel}
     />
