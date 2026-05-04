@@ -865,7 +865,7 @@ export default function App() {
               </div>
             </div>
           </header>
-          {viewMode === "eras" ? (
+          <div className={viewMode === "eras" ? "" : "hidden"}>
             <EraTab
               apiBase={API_BASE}
               wsBase={WS_BASE}
@@ -874,7 +874,8 @@ export default function App() {
               model={model}
               onChapterFinalized={reloadEras}
             />
-          ) : (
+          </div>
+          <div className={viewMode === "themes" ? "" : "hidden"}>
             <ChatWorkspace
               key="themes"
               apiBase={API_BASE}
@@ -882,7 +883,7 @@ export default function App() {
               scope={{ kind: "themes" }}
               model={model}
             />
-          )}
+          </div>
           {chapterEditorOpen && (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4"

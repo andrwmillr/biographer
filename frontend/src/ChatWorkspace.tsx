@@ -518,7 +518,6 @@ export function ChatWorkspace({
     const text = replyText.trim();
     if (!ws || !text || wsStatus !== "awaiting_reply") return;
     ws.send(JSON.stringify({ type: "reply", text }));
-    setLog((l) => [...l, { kind: "user", text }]);
     setReplyText("");
     setWsStatus("generating");
   }

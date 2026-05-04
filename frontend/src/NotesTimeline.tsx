@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import type { Note } from "./types";
 
@@ -54,6 +54,7 @@ export function NotesTimeline({
   const [selected, setSelected] = useState<Note | null>(null);
   const [scrollTop, setScrollTop] = useState<number>(0);
   const [showTimeline, setShowTimeline] = useState<boolean>(true);
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Reset selection when the notes set changes (era/topN change).
   useEffect(() => {
@@ -64,7 +65,18 @@ export function NotesTimeline({
   useEffect(() => {
     if (!highlightDate) return;
     const match = notes.find((n) => n.date.slice(0, 10) === highlightDate);
-    if (match) setSelected(match);
+    if (match) {
+      setSelected(match);
+      // Scroll the timeline to bring the selected group into view.
+      requestAnimationFrame(() => {
+        const el = timelineScrollRef.current;
+        if (!el) return;
+        const target = el.querySelector(`[data-date="${highlightDate}"]`);
+        if (target) {
+          target.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      });
+    }
   }, [highlightDate, notes]);
 
   if (loading) {
@@ -166,6 +178,7 @@ export function NotesTimeline({
               </div>
             )}
             <div
+              ref={timelineScrollRef}
               className="flex-1 overflow-auto"
               onScroll={(e) =>
                 setScrollTop(
@@ -201,6 +214,7 @@ export function NotesTimeline({
                     return (
                       <div
                         key={group.dateKey}
+                        data-date={group.dateKey}
                         className="absolute"
                         style={{ top: y, left: 0, right: 0, height }}
                       >
@@ -293,7 +307,12 @@ export function NotesTimeline({
               <div className="font-serif text-[14px] leading-[1.6] text-stone-900">
                 {selected.body ? (
                   <Markdown
-                    content={selected.body.replace(/(\S)\n(?=\S)/g, "$1  \n")}
+                    content={selected.body
+                      // Escape setext heading triggers: a line of only
+                      // dashes/equals turns the preceding paragraph into
+                      // an <h1>/<h2>. Prefix with a zero-width space.
+                      .replace(/^([-=]{3,})\s*$/gm, "\u200B$1")
+                      .replace(/(\S)\n(?=\S)/g, "$1  \n")}
                     variant="chapter"
                   />
                 ) : (
