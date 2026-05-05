@@ -7,14 +7,10 @@ type Playlist = {
   image: string;
   uri: string;
   external_url: string;
-  estimated_date: string | null;
-  in_era: boolean;
 };
 
 type SpotifyPlayerProps = {
   apiBase: string;
-  eraStart: string | null;
-  eraEnd: string | null;
 };
 
 const SpotifyIcon = ({ className = "w-3.5 h-3.5" }: { className?: string }) => (
@@ -23,11 +19,12 @@ const SpotifyIcon = ({ className = "w-3.5 h-3.5" }: { className?: string }) => (
   </svg>
 );
 
-export function SpotifyPlayer({ apiBase, eraStart, eraEnd }: SpotifyPlayerProps) {
+export function SpotifyPlayer({ apiBase }: SpotifyPlayerProps) {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   // Check connection status on mount
   useEffect(() => {
@@ -37,26 +34,16 @@ export function SpotifyPlayer({ apiBase, eraStart, eraEnd }: SpotifyPlayerProps)
       .catch(() => setConnected(false));
   }, [apiBase]);
 
-  // Fetch playlists when connected and era changes
+  // Fetch playlists once when connected
   useEffect(() => {
     if (!connected) return;
     setLoading(true);
-    setActiveId(null);
-    const params = new URLSearchParams();
-    if (eraStart) params.set("era_start", eraStart);
-    if (eraEnd) params.set("era_end", eraEnd);
-    fetch(`${apiBase}/spotify/playlists?${params}`, { headers: authHeaders() })
+    fetch(`${apiBase}/spotify/playlists`, { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : { playlists: [] }))
-      .then((d) => {
-        const eraMatched = ((d.playlists || []) as Playlist[]).filter(
-          (p) => p.in_era,
-        );
-        setPlaylists(eraMatched);
-        if (eraMatched.length) setActiveId(eraMatched[0].id);
-      })
+      .then((d) => setPlaylists((d.playlists || []) as Playlist[]))
       .catch(() => setPlaylists([]))
       .finally(() => setLoading(false));
-  }, [apiBase, connected, eraStart, eraEnd]);
+  }, [apiBase, connected]);
 
   // Check URL hash for spotify=connected (after OAuth redirect)
   useEffect(() => {
@@ -78,7 +65,7 @@ export function SpotifyPlayer({ apiBase, eraStart, eraEnd }: SpotifyPlayerProps)
           className="flex items-center gap-1.5 text-xs font-sans text-stone-400 hover:text-[#1DB954] transition-colors"
         >
           <SpotifyIcon className="w-3 h-3" />
-          listen to this chapter
+          connect spotify
         </button>
       </div>
     );
@@ -89,44 +76,61 @@ export function SpotifyPlayer({ apiBase, eraStart, eraEnd }: SpotifyPlayerProps)
     return (
       <div className="flex justify-center pb-2 text-xs text-stone-300 font-sans">
         <SpotifyIcon className="w-3 h-3 mr-1.5 text-stone-300" />
-        finding playlists from this era...
+        loading playlists...
       </div>
     );
   }
 
-  // No era-matched playlists
   if (!playlists.length) return null;
 
-  // ---- Has matches: show player ----
+  // Collapsed: just the Spotify icon + current playlist name
+  if (!expanded) {
+    return (
+      <div className="flex justify-center pb-2">
+        <button
+          onClick={() => {
+            setExpanded(true);
+            if (!activeId && playlists.length) setActiveId(playlists[0].id);
+          }}
+          className="flex items-center gap-1.5 text-xs font-sans text-stone-400 hover:text-[#1DB954] transition-colors"
+        >
+          <SpotifyIcon className="w-3 h-3" />
+          {activeId
+            ? playlists.find((p) => p.id === activeId)?.name ?? "play music"
+            : "play music"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="pb-2">
       <div className="mx-6 space-y-1.5">
         <div className="flex items-center justify-center gap-2">
           <SpotifyIcon className="w-3 h-3 text-[#1DB954] shrink-0" />
-          {playlists.length > 1 ? (
-            <select
-              className="appearance-none bg-transparent text-xs font-sans text-stone-500 hover:text-stone-700 cursor-pointer border-0 border-b border-dotted border-stone-300 focus:outline-none pr-4"
-              style={{
-                backgroundImage:
-                  "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23a8a29e' stroke-width='1.2' d='M1 1l4 4 4-4'/%3E%3C/svg%3E\")",
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "right 0 center",
-              }}
-              value={activeId || ""}
-              onChange={(e) => setActiveId(e.target.value)}
-            >
-              {playlists.map((pl) => (
-                <option key={pl.id} value={pl.id}>
-                  {pl.name}
-                  {pl.estimated_date ? ` (${pl.estimated_date})` : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-xs font-sans text-stone-500">
-              {playlists[0]?.name}
-            </span>
-          )}
+          <select
+            className="appearance-none bg-transparent text-xs font-sans text-stone-500 hover:text-stone-700 cursor-pointer border-0 border-b border-dotted border-stone-300 focus:outline-none pr-4"
+            style={{
+              backgroundImage:
+                "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23a8a29e' stroke-width='1.2' d='M1 1l4 4 4-4'/%3E%3C/svg%3E\")",
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 0 center",
+            }}
+            value={activeId || ""}
+            onChange={(e) => setActiveId(e.target.value)}
+          >
+            {playlists.map((pl) => (
+              <option key={pl.id} value={pl.id}>
+                {pl.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setExpanded(false)}
+            className="text-[10px] text-stone-300 hover:text-stone-500 ml-1"
+          >
+            ✕
+          </button>
         </div>
         {activeId && (
           <iframe

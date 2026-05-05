@@ -40,12 +40,17 @@ def require_admin(email: str | None = Depends(get_auth_optional)) -> str:
     return email
 
 
+def _valid_slug(slug: str) -> bool:
+    """Accept legacy slugs (andrew, poems) and c_-prefixed slugs."""
+    return slug == "andrew" or bool(re.fullmatch(r"c_[0-9a-z_]+", slug))
+
+
 def is_sample_corpus(slug: str) -> bool:
     """A corpus is a sample if its `_meta.json` has `"sample": true`.
     Sample corpora are readable without auth (so visitors can explore
     famous PD diaries before importing their own notes) but stay
     write-locked through require_writable."""
-    if not re.fullmatch(r"c_[0-9a-f]{16}", slug):
+    if not _valid_slug(slug):
         return False
     meta_path = config.CORPORA_ROOT / slug / "_meta.json"
     if not meta_path.exists():
@@ -74,15 +79,14 @@ def require_corpus_access(
     auth_email: str | None = Depends(get_auth_optional),
     x_corpus_secret: str | None = Header(None),
 ) -> str:
-    """Gate on (secret key) OR (sample corpus) OR (auth token + ownership).
-    Secret-protected corpora return 404 without the key (no existence leak)."""
+    """Gate on (sample corpus) OR (secret key) OR (auth token + ownership)."""
+    if is_sample_corpus(session):
+        return session
     corpus_secret = _get_corpus_secret(session)
     if corpus_secret:
         if x_corpus_secret == corpus_secret:
             return session
         raise HTTPException(404, "not found")
-    if is_sample_corpus(session):
-        return session
     if auth_email is None:
         raise HTTPException(401, "auth required: missing or invalid X-Auth-Token")
     state = _load_auth()
@@ -103,11 +107,7 @@ def require_writable(session: str = Depends(require_corpus_access)) -> str:
 def corpus_dir(session: str) -> Path:
     """Resolve a session string to its on-disk corpus directory.
     Raises 401 for invalid / nonexistent sessions."""
-    if (
-        session != "andrew"
-        and session != "poems"
-        and not re.fullmatch(r"c_[0-9a-f]{16}", session)
-    ):
+    if not _valid_slug(session):
         raise HTTPException(401, "invalid session")
     candidate = config.CORPORA_ROOT / session
     try:
@@ -202,11 +202,13 @@ def get_chapter(era: str, session: str = Depends(require_corpus_access)):
 
 @router.get("/notes")
 def list_notes(era: str, session: str = Depends(require_corpus_access)):
+    from api.commonplace import load_highlighted_rels
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
     _, by_era, _ = _load_state(corpus_id)
     if era not in by_era:
         raise HTTPException(404, f"unknown era: {era}")
+    highlighted = load_highlighted_rels(corpus_id)
     notes = sorted(by_era[era], key=lambda n: n.get("date", ""))
     out = []
     for n in notes:
@@ -219,6 +221,7 @@ def list_notes(era: str, session: str = Depends(require_corpus_access)):
             "label": label,
             "source": _note_source(rel, corpus_id),
             "body": wb.parse_note_body(rel, corpus_id),
+            "highlighted": rel in highlighted,
         }
         if n.get("editor_note"):
             item["editor_note"] = n["editor_note"]
@@ -232,6 +235,7 @@ def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)
     Each note includes `sampled: true` when it falls in the folder-aware
     top-N selection used by the themes flow — so the UI can highlight
     which notes the agent actually reads."""
+    from api.commonplace import load_highlighted_rels
     from core.sampling import folder_aware_sample
     corpus_id = _session_corpus_id(session)
     corpus_dir(session)
@@ -244,6 +248,8 @@ def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)
         if era_notes:
             for n in folder_aware_sample(era_notes, top_n, corpus_id):
                 sampled_rels.add(n["rel"])
+
+    highlighted = load_highlighted_rels(corpus_id)
 
     # Flatten all eras, chronological
     all_notes = []
@@ -262,6 +268,7 @@ def list_all_notes(top_n: int = 5, session: str = Depends(require_corpus_access)
             "source": _note_source(rel, corpus_id),
             "body": wb.parse_note_body(rel, corpus_id),
             "sampled": rel in sampled_rels,
+            "highlighted": rel in highlighted,
         }
         if n.get("editor_note"):
             item["editor_note"] = n["editor_note"]

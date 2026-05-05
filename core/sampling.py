@@ -30,11 +30,14 @@ MIN_ERA_BUDGET = 5_000
 
 
 def budget_sample(notes_in_era: list[dict], char_budget: int,
-                  corpus_id: str | None = None) -> list[dict]:
+                  corpus_id: str | None = None,
+                  highlighted_rels: set[str] | None = None) -> list[dict]:
     """Draw random notes from an era until char_budget is filled.
 
     Returns notes with bodies attached, sorted by date. Skips notes
-    shorter than MIN_NOTE_BODY. Snips notes longer than MAX_PER_NOTE."""
+    shorter than MIN_NOTE_BODY. Snips notes longer than MAX_PER_NOTE.
+    Highlighted notes (from the commonplace flow) are always included
+    first so they inform themes/preface analysis."""
     # Load bodies and filter out empties / too-short
     candidates = []
     for n in notes_in_era:
@@ -47,12 +50,16 @@ def budget_sample(notes_in_era: list[dict], char_budget: int,
         n2["body_len"] = len(body)
         candidates.append(n2)
 
-    # Shuffle for random selection
-    random.shuffle(candidates)
+    # Partition: highlighted notes first (deterministic), rest shuffled.
+    hl = highlighted_rels or set()
+    priority = [n for n in candidates if n["rel"] in hl]
+    rest = [n for n in candidates if n["rel"] not in hl]
+    random.shuffle(rest)
+    ordered = priority + rest
 
     sampled = []
     used = 0
-    for n in candidates:
+    for n in ordered:
         body = n["body"]
         # Snip oversized notes so one entry doesn't dominate
         if len(body) > MAX_PER_NOTE:
@@ -93,7 +100,8 @@ def folder_aware_sample(notes_in_era, top_n, corpus_id=None):
 
 
 def build_input(top_n, corpus_id=None, char_cap=None, label_filter=None,
-                exclude_rels=None, shuffle=False, return_notes=False):
+                exclude_rels=None, shuffle=False, return_notes=False,
+                highlighted_rels: set[str] | None = None):
     """Assemble the corpus-overview + per-era sample input message.
 
     top_n is ignored for sampling (budget-proportional now) but kept in
@@ -147,7 +155,8 @@ def build_input(top_n, corpus_id=None, char_cap=None, label_filter=None,
         era_notes = by_era.get(name, [])
         if not era_notes:
             continue
-        sampled = budget_sample(era_notes, era_budgets[name], corpus_id)
+        sampled = budget_sample(era_notes, era_budgets[name], corpus_id,
+                               highlighted_rels=highlighted_rels)
         # Tag each note with its era name so shuffle mode can include it.
         for n in sampled:
             n["era"] = name

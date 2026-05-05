@@ -496,8 +496,8 @@ export default function App() {
   // path. Rendered on both the login and picker screens.
   function renderSamples(label: string) {
     if (!samples.length) return null;
-    const main = samples.filter((s) => s.slug !== "poems");
-    const bonus = samples.filter((s) => s.slug === "poems");
+    const main = samples.filter((s) => s.slug !== "c_poems");
+    const bonus = samples.filter((s) => s.slug === "c_poems");
     function sampleCard(s: Sample) {
       return (
         <button
@@ -946,7 +946,7 @@ export default function App() {
               apiBase={API_BASE}
               wsBase={WS_BASE}
               model={model}
-              readOnly={corpusInfo?.slug === "poems"}
+              readOnly={corpusInfo?.slug === "c_poems"}
             />
           </div>
           {chapterEditorOpen && (

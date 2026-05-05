@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import time
 import urllib.error
@@ -245,12 +246,8 @@ def disconnect(email: str = Depends(_get_email)):
 
 
 @router.get("/playlists")
-def playlists(
-    era_start: str = Query("", description="YYYY-MM"),
-    era_end: str = Query("", description="YYYY-MM, empty = present"),
-    email: str = Depends(_get_email),
-):
-    """Fetch user's playlists with cached date estimation."""
+def playlists(email: str = Depends(_get_email)):
+    """Return all user playlists, sorted alphabetically."""
     token = _ensure_fresh_token(email)
     if not token:
         raise HTTPException(401, "spotify not connected")
@@ -259,71 +256,19 @@ def playlists(
     if not data or "items" not in data:
         raise HTTPException(502, "failed to fetch playlists from Spotify")
 
-    era_start_dt = _parse_ym(era_start)
-    era_end_dt = _parse_ym(era_end) or datetime.now()
-
-    cache = _load_cache()
-    cache_dirty = False
-    # Limit API calls per request to avoid rate limiting.
-    # Cache fills incrementally over a few page loads.
-    MAX_FETCHES = 3
-    fetch_count = 0
-
     results = []
     for pl in data["items"]:
         if not pl or not pl.get("id"):
             continue
-
-        # Cache key: playlist id + snapshot_id (changes when playlist is modified)
-        snapshot = pl.get("snapshot_id", "")
-        cache_key = f"{pl['id']}:{snapshot}"
-
-        if cache_key in cache:
-            # Use cached date estimation
-            estimated_str = cache[cache_key]
-            estimated = _parse_ym(estimated_str) if estimated_str else None
-        elif fetch_count < MAX_FETCHES:
-            # Fetch track data and estimate date (only for uncached playlists)
-            if fetch_count > 0:
-                time.sleep(0.5)  # Be gentle with Spotify rate limits
-            items_url = (
-                f"https://api.spotify.com/v1/playlists/{pl['id']}"
-                f"/items?limit=10"
-            )
-            items_data, fetch_ok = _spotify_get(token, items_url)
-            estimated = _estimate_playlist_date(items_data)
-            fetch_count += 1
-            if fetch_ok:
-                # Only cache successful responses — don't persist rate-limit failures
-                cache[cache_key] = estimated.strftime("%Y-%m") if estimated else ""
-                cache_dirty = True
-        else:
-            # Skip — will be fetched on a subsequent request
-            estimated = None
-
-        in_era = False
-        if estimated and era_start_dt:
-            in_era = era_start_dt <= estimated <= era_end_dt
-
         results.append({
             "id": pl["id"],
             "name": pl.get("name", "") or "Untitled",
             "image": (pl.get("images") or [{}])[0].get("url", ""),
             "uri": pl.get("uri", ""),
             "external_url": pl.get("external_urls", {}).get("spotify", ""),
-            "estimated_date": estimated.strftime("%Y-%m") if estimated else None,
-            "in_era": in_era,
         })
 
-    if cache_dirty:
-        _save_cache(cache)
-
-    in_era_count = sum(1 for r in results if r["in_era"])
-    print(f"[spotify] {len(results)} playlists, {in_era_count} in era "
-          f"{era_start or '?'}..{era_end or 'now'}")
-
-    # In-era first, then by estimated date, undated last
-    results.sort(key=lambda x: (not x["in_era"], x["estimated_date"] or "9999"))
+    results.sort(key=lambda x: x["name"].lower())
     return {"playlists": results}
 
 
@@ -337,37 +282,24 @@ def _parse_ym(ym: str) -> datetime | None:
         return None
 
 
-def _estimate_playlist_date(items_data: dict | None) -> datetime | None:
-    """Estimate when a playlist is 'from' using median album release date.
+_YEAR_RE = re.compile(r"(?:^|[\s'(])(\d{4})(?:[\s')]|$)")
 
-    The added_at timestamps are unreliable (reset on account migration),
-    but album.release_date reflects when the music came out. The median
-    clusters around the era the user was actively discovering that music.
-    """
-    if not items_data or "items" not in items_data:
-        return None
-    dates: list[datetime] = []
-    for item in items_data["items"]:
-        # Dev-mode response uses "item" not "track"
-        track = item.get("item") or item.get("track") or {}
-        album = track.get("album") or {}
-        rd = album.get("release_date", "")
-        if not rd:
-            continue
-        try:
-            # Spotify returns YYYY, YYYY-MM, or YYYY-MM-DD
-            parts = rd.split("-")
-            y = int(parts[0])
-            m = int(parts[1]) if len(parts) > 1 else 6
-            d = int(parts[2]) if len(parts) > 2 else 15
-            dates.append(datetime(y, m, d))
-        except (ValueError, IndexError):
-            continue
-    if not dates:
-        return None
-    # Median release date
-    dates.sort()
-    mid = len(dates) // 2
-    return dates[mid]
+
+def _year_from_name(name: str) -> int | None:
+    """Extract a plausible year (1990–2030) from a playlist name."""
+    for m in _YEAR_RE.finditer(name):
+        y = int(m.group(1))
+        if 1990 <= y <= 2030:
+            return y
+    return None
+
+
+def _estimate_playlist_date(name: str) -> datetime | None:
+    """Extract a year from the playlist name. This is the only reliable
+    signal — added_at timestamps reset on account migration and album
+    release dates reflect when the music was made, not when the user
+    was listening. Returns None for playlists without a year in the name."""
+    y = _year_from_name(name)
+    return datetime(y, 6, 15) if y else None
 
 

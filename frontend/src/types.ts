@@ -7,6 +7,7 @@ export type Note = {
   body: string;
   editor_note?: string;
   sampled?: boolean;
+  highlighted?: boolean;
 };
 
 export type Era = {

@@ -58,9 +58,11 @@ def _prepare_themes_run(top_n: int = 5, corpus_id: str | None = None) -> dict:
     and OUT_DIR layout.
 
     Returns {run_dir, run_rel, full_user_msg, top_n, in_chars}."""
+    from api.commonplace import load_highlighted_rels
     from core.sampling import build_input
 
-    user_msg, _ = build_input(top_n, corpus_id=corpus_id)
+    hl = load_highlighted_rels(corpus_id)
+    user_msg, _ = build_input(top_n, corpus_id=corpus_id, highlighted_rels=hl)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _themes_base(corpus_id) / f"run_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +80,17 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
     """Build a single-phase themes kickoff: generate round-1 themes
     inline in chat, then transition to curate orientation. Replaces the
     old two-phase flow (`claude -p` round-1 then curate)."""
+    from api.commonplace import load_all_passages
+
+    passages = load_all_passages(corpus_id)
+    passages_block = ""
+    if passages:
+        passages_block = (
+            "\n\n# Highlighted passages (curated quotes — these were singled out "
+            "as especially vivid or significant; give them extra weight when "
+            "identifying themes)\n\n"
+            + passages
+        )
     return (
         wb.subject_context_for(corpus_id)
         + "You're starting a fresh themes session. "
@@ -107,6 +120,7 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
         "--- INPUT-START ---\n\n"
         "# Corpus sample (your full context)\n\n"
         + corpus_sample
+        + passages_block
         + "\n\n--- INPUT-END ---\n"
     )
 
@@ -247,8 +261,7 @@ async def themes_curate(ws: WebSocket):
     except HTTPException as e:
         await reject(e.detail)
         return
-    # Auth gate mirrors /session: samples are open to anonymous visitors so
-    # the demo flow works without an account; non-samples require ownership.
+    # Auth gate: samples are open to anonymous visitors; others need ownership.
     if not is_sample_corpus(session_slug):
         if not auth_token:
             await reject("auth required: missing token in start message")

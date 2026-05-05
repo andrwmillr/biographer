@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { NotesTimeline } from "./NotesTimeline";
+import { TimelineSidebar } from "./TimelineSidebar";
 import { authHeaders, getAuthToken, getSession } from "./auth";
 import type { Note } from "./types";
 
@@ -28,10 +28,11 @@ const PONG_DEADLINE_MS = 25_000;
 /* ------------------------------------------------------------------ */
 
 function eraForDate(date: string, eras: Era[]): string {
+  const ym = date.slice(0, 7);
   for (const e of eras) {
     const lo = e.start ?? "";
     const hi = e.end ?? "9999";
-    if (date >= lo && date <= hi) return e.name;
+    if (ym >= lo && ym <= hi) return e.name;
   }
   return "";
 }
@@ -47,10 +48,11 @@ function parsePassages(md: string, eras: Era[]): Passage[] {
       const date = (parts[0] ?? "").replace(/^\[|\]$/g, "");
       const llmEra = parts[1] ?? "";
       const title = (parts[2] ?? "").trim();
-      const body = lines.slice(1).join("\n").trim();
+      const body = lines.slice(1).join("\n").trim()
+        .replace(/\n*DONE:.*$/s, "").trim();
       return { date, era: eraForDate(date, eras) || llmEra, title, body };
     })
-    .filter((p) => p.body && !p.body.startsWith("DONE:"));
+    .filter((p) => p.body);
 }
 
 function isUntitled(title: string): boolean {
@@ -318,14 +320,15 @@ export function CommonplaceWorkspace({ apiBase, wsBase, model, readOnly }: Props
         } else if (t === "draft_update") {
           runPassages = parsePassages(payload.content ?? "", erasRef.current);
           setPassages([
-            ...runPassages.slice().reverse(),
             ...(basePassages ?? []),
+            ...runPassages,
           ]);
         } else if (t === "finalized") {
           setStatus("done");
-          setPassages(
-            parsePassages(payload.content ?? "", erasRef.current).reverse(),
-          );
+          setPassages([
+            ...(basePassages ?? []),
+            ...parsePassages(payload.content ?? "", erasRef.current),
+          ]);
           setStatusText("done");
           fetch(`${apiBase}/commonplace/progress`, { headers: authHeaders() })
             .then((r) => (r.ok ? r.json() : null))
@@ -493,7 +496,7 @@ export function CommonplaceWorkspace({ apiBase, wsBase, model, readOnly }: Props
                   ? "extracting..."
                   : passages.length
                     ? "run again"
-                    : "find the good stuff"}
+                    : "discover highlights"}
             </button>
             <div className="flex-1 min-w-0">
               {statusText && (
@@ -525,12 +528,13 @@ export function CommonplaceWorkspace({ apiBase, wsBase, model, readOnly }: Props
       {/* Main: timeline + card grid */}
       <div className="flex flex-1 min-h-0">
         {passages.length > 0 && (
-          <div className="w-[200px] shrink-0 border-r border-stone-200">
-            <NotesTimeline
+          <div className="shrink-0">
+            <TimelineSidebar
               notes={timelineNotes}
               loading={false}
               highlightDate={highlightDate}
               onSelect={(n) => scrollToCard(n.date)}
+              bg="bg-stone-50"
             />
           </div>
         )}
@@ -541,7 +545,7 @@ export function CommonplaceWorkspace({ apiBase, wsBase, model, readOnly }: Props
         >
           {passages.length === 0 && status === "idle" ? (
             <div className="flex items-center justify-center h-full text-sm text-stone-400 font-sans">
-              press &ldquo;find the good stuff&rdquo; to start
+              press &ldquo;discover highlights&rdquo; to start
             </div>
           ) : passages.length === 0 && status === "running" ? (
             <div className="flex items-center justify-center h-full text-sm text-stone-400 font-sans">

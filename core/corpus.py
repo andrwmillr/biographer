@@ -343,7 +343,7 @@ def load_corpus_notes(corpus_id=None):
             v = v.strip().strip('"').strip("'")
             if k == "title":
                 title = v
-            elif k == "date_created" and not date:
+            elif k in ("date_created", "date") and not date:
                 date = v.rstrip("Z")
         if not date:
             fn_match = re.match(r"(\d{4}-\d{2}-\d{2})", path.stem)

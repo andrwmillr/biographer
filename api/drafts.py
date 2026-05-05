@@ -20,6 +20,7 @@ from pathlib import Path
 from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import ClaudeAgentOptions
 from api.config import KICKOFF_PATH, PREFACE_PATH, REPO
+from api.commonplace import load_passages_for_era
 from api.corpora import (
     _load_state,
     _session_corpus_id,
@@ -122,6 +123,15 @@ def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool 
         )
         parts.append(themes_text.rstrip("\n") + "\n\n")
         parts.append("--- END CORPUS THEMES ---\n\n")
+    passages_text = load_passages_for_era(era_name, corpus_id)
+    if passages_text:
+        parts.append(
+            "--- HIGHLIGHTED PASSAGES (curated quotes from this era's notes — "
+            "these were singled out as especially vivid or significant; weave "
+            "them in where they serve the narrative) ---\n\n"
+        )
+        parts.append(passages_text.rstrip("\n") + "\n\n")
+        parts.append("--- END HIGHLIGHTED PASSAGES ---\n\n")
     parts.append(era_msg)
     full_user_msg = "".join(parts)
 
@@ -395,10 +405,7 @@ async def session(ws: WebSocket):
     except HTTPException as e:
         await reject(e.detail)
         return
-    # Auth gate: drafting requires an auth token whose user owns the slug.
-    # Samples are open to anonymous visitors so demos work without an account
-    # — note that drafts spawn a Claude subprocess on the host's dime and
-    # writes (run dirs, finalize) mutate the sample's own corpus tree.
+    # Auth gate: samples are open to anonymous visitors; others need ownership.
     if not is_sample_corpus(session_slug):
         if not auth_token:
             await reject("auth required: missing token in start message")

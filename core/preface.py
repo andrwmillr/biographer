@@ -95,6 +95,16 @@ def build_preface_input(corpus_id: str | None = None) -> str:
         parts.append(themes_text.rstrip("\n") + "\n\n")
         parts.append("--- END CORPUS THEMES ---\n\n")
 
+    from api.commonplace import load_all_passages
+    passages_text = load_all_passages(corpus_id)
+    if passages_text:
+        parts.append(
+            "--- HIGHLIGHTED PASSAGES (curated quotes singled out as especially "
+            "vivid or significant — consider weaving these into the preface) ---\n\n"
+        )
+        parts.append(passages_text.rstrip("\n") + "\n\n")
+        parts.append("--- END HIGHLIGHTED PASSAGES ---\n\n")
+
     parts.append("--- CITED SOURCE NOTES (notes referenced in the chapters and themes — available for direct quotation) ---\n\n")
     parts.append(
         f"You are seeing {len(cited_notes)} source notes that the chapters "

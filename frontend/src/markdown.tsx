@@ -84,24 +84,59 @@ export function formatTool(name: string, input: unknown, runDir: string): string
   return verb;
 }
 
-// Wrap citation patterns in markdown link syntax pointing at #cite-<date>.
+// Wrap citation patterns in markdown link syntax pointing at
+// #cite-<date>::<encoded-context>.  The context is the rest of the
+// line surrounding the date — used downstream to disambiguate when
+// multiple notes share a date.
 //   - `[YYYY-MM-DD]` (bracketed)                  — anywhere
 //   - `- YYYY-MM-DD` / `* YYYY-MM-DD` (list-item) — bare date at start of a list item
 // The list-item form is a fallback for when the themes agent strips brackets
 // off the prompt template; the bracketed form is the canonical citation.
+function citeHref(date: string, context: string): string {
+  // Strip markdown formatting — we only need plain text for title matching.
+  const plain = context
+    .replace(/\*+/g, "")
+    .replace(/[\[\]()_~`#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  if (!plain) return `#cite-${date}`;
+  // encodeURIComponent leaves ()!*~' unencoded — they break markdown
+  // link syntax [text](url), so percent-encode them too.
+  const encoded = encodeURIComponent(plain).replace(
+    /[()!*~']/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"),
+  );
+  return `#cite-${date}::${encoded}`;
+}
+
 function wrapCitations(text: string): string {
   return text
-    .replace(/(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g, "[\\[$1\\]](#cite-$1)")
+    .replace(
+      /(?<!\])\[(\d{4}-\d{2}-\d{2})\](?!\()/g,
+      (match, date, offset, str) => {
+        // Grab the full line for context (title may precede or follow the date).
+        const lineStart = str.lastIndexOf("\n", offset) + 1;
+        const lineEnd = str.indexOf("\n", offset + match.length);
+        const line = str.slice(lineStart, lineEnd >= 0 ? lineEnd : str.length);
+        return `[\\[${date}\\]](${citeHref(date, line)})`;
+      },
+    )
     .replace(
       /^(\s*[-*]\s+)(\d{4}-\d{2}-\d{2})(?=\s|$)/gm,
-      "$1[$2](#cite-$2)",
+      (match, prefix, date, offset, str) => {
+        const afterMatch = offset + match.length;
+        const lineEnd = str.indexOf("\n", afterMatch);
+        const rest = str.slice(afterMatch, lineEnd >= 0 ? lineEnd : str.length);
+        return `${prefix}[${date}](${citeHref(date, rest)})`;
+      },
     );
 }
 
 type MarkdownProps = {
   content: string;
   variant: "narration" | "chapter";
-  onCiteClick?: (dateKey: string) => void;
+  onCiteClick?: (dateKey: string, title?: string) => void;
 };
 
 // Renders markdown with shared link handling: `#cite-YYYY-MM-DD` and bare
@@ -112,8 +147,19 @@ export function Markdown({ content, variant, onCiteClick }: MarkdownProps) {
     ...base,
     a: ({ href, children, ...props }: any) => {
       let dateKey = "";
-      if (href?.startsWith("#cite-")) dateKey = href.slice(6);
-      else if (href && /^\d{4}-\d{2}-\d{2}$/.test(href)) dateKey = href;
+      let citeContext = "";
+      if (href?.startsWith("#cite-")) {
+        const payload = href.slice(6);
+        const sep = payload.indexOf("::");
+        if (sep >= 0) {
+          dateKey = payload.slice(0, sep);
+          try { citeContext = decodeURIComponent(payload.slice(sep + 2)); } catch { /* */ }
+        } else {
+          dateKey = payload;
+        }
+      } else if (href && /^\d{4}-\d{2}-\d{2}$/.test(href)) {
+        dateKey = href;
+      }
       if (dateKey && onCiteClick) {
         return (
           <a
@@ -121,7 +167,7 @@ export function Markdown({ content, variant, onCiteClick }: MarkdownProps) {
             className="text-stone-700 underline decoration-dotted underline-offset-2 cursor-pointer hover:text-stone-900"
             onClick={(e) => {
               e.preventDefault();
-              onCiteClick(dateKey);
+              onCiteClick(dateKey, citeContext);
             }}
           >
             {children}

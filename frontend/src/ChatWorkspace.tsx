@@ -8,7 +8,6 @@ import {
 } from "react-resizable-panels";
 import { Markdown, formatTool } from "./markdown";
 import { NotesTimeline } from "./NotesTimeline";
-import { SpotifyPlayer } from "./SpotifyPlayer";
 import { authHeaders, getAuthToken, getSession } from "./auth";
 import type {
   FinalizedInfo,
@@ -110,6 +109,7 @@ export function ChatWorkspace({
   };
   const [sessionStartedOnce, setSessionStartedOnce] = useState(false);
   const [highlightDate, setHighlightDate] = useState<string>("");
+  const [highlightContext, setHighlightContext] = useState<string>("");
 
   // Pane collapse state. Draft starts collapsed on first-ever mount —
   // it's empty until the agent produces output, and the auto-expand
@@ -357,6 +357,7 @@ export function ChatWorkspace({
     setError("");
     setFinalized(null);
     setHighlightDate("");
+    setHighlightContext("");
     narrationBufRef.current = "";
     sawFirstAwaitingRef.current = false;
     wsTurnStartRef.current = Date.now();
@@ -615,8 +616,9 @@ export function ChatWorkspace({
     narrationBufRef.current = "";
   }
 
-  function handleCiteClick(dateKey: string) {
+  function handleCiteClick(dateKey: string, context?: string) {
     setHighlightDate(dateKey);
+    setHighlightContext(context ?? "");
     if (collapsed.notes) {
       panelRefs.current.notes?.expand();
     }
@@ -926,13 +928,6 @@ export function ChatWorkspace({
             <div className="px-6 pt-2 pb-3 text-center font-serif text-lg text-stone-800">
               {draftHeaderSlot}
             </div>
-            {scope.kind === "era" && (
-              <SpotifyPlayer
-                apiBase={apiBase}
-                eraStart={scope.eraStart}
-                eraEnd={scope.eraEnd}
-              />
-            )}
             <div className="mx-[11px] h-px bg-[linear-gradient(to_right,transparent_0%,#d6d3d1_6%,#d6d3d1_94%,transparent_100%)]" />
           </div>
         )}
@@ -959,6 +954,7 @@ export function ChatWorkspace({
         notes={notes}
         loading={notesLoading}
         highlightDate={highlightDate}
+        highlightContext={highlightContext}
         emptyHint={
           scope.kind === "era" ? "no notes in this era" : "no notes available"
         }
@@ -1119,14 +1115,6 @@ export function ChatWorkspace({
       {notesError && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {notesError}
-        </div>
-      )}
-
-      {finalized && (
-        <div className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-          Locked to <span className="font-mono">{finalized.location}</span> ·{" "}
-          {finalized.words} words
-          {finalized.overwritten && " · overwrote previous"}
         </div>
       )}
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -275,6 +276,84 @@ async def _commonplace_watch(session: Session) -> None:
                 })
             except Exception:
                 pass
+
+
+_PASSAGE_HEADER_RE = re.compile(r"^### \[(\d{4}-\d{2}-\d{2})\] · .+ · (.*)$", re.MULTILINE)
+
+
+def load_highlighted_keys(corpus_id: str | None = None) -> set[tuple[str, str]]:
+    """Parse canonical.md and return (date, title) pairs for every note
+    that has at least one highlighted passage."""
+    canonical = _commonplace_base(corpus_id) / "canonical.md"
+    if not canonical.exists():
+        return set()
+    text = canonical.read_text(encoding="utf-8")
+    return {(m.group(1), m.group(2).strip()) for m in _PASSAGE_HEADER_RE.finditer(text)}
+
+
+def load_passages_for_era(era_name: str, corpus_id: str | None = None) -> str:
+    """Return the passage blocks from canonical.md whose dates fall
+    within the given era. Used to inject highlights into the chapter
+    drafting prompt."""
+    canonical = _commonplace_base(corpus_id) / "canonical.md"
+    if not canonical.exists():
+        return ""
+    text = canonical.read_text(encoding="utf-8")
+    eras = wb.load_eras(corpus_id)
+    blocks = text.split("### ")
+    out = []
+    for block in blocks:
+        if not block.strip():
+            continue
+        m = re.match(r"\[(\d{4}-\d{2}-\d{2})\]", block)
+        if not m:
+            continue
+        date = m.group(1)
+        if wb.era_of(date, eras) == era_name:
+            out.append("### " + block.rstrip())
+    return "\n\n".join(out)
+
+
+def load_all_passages(corpus_id: str | None = None) -> str:
+    """Return the full canonical.md content, or empty string if none."""
+    canonical = _commonplace_base(corpus_id) / "canonical.md"
+    if not canonical.exists():
+        return ""
+    return canonical.read_text(encoding="utf-8").strip()
+
+
+def load_highlighted_rels(corpus_id: str | None = None) -> set[str]:
+    """Return the set of note rels that have commonplace passages.
+    Matches on (date, title); falls back to date-only when a title
+    doesn't match any note (LLM may have cleaned/shortened it)."""
+    keys = load_highlighted_keys(corpus_id)
+    if not keys:
+        return set()
+    notes = wb.load_corpus_notes(corpus_id)
+    wb.apply_date_overrides(notes, corpus_id)
+    wb.apply_note_metadata(notes, corpus_id)
+
+    # Build lookup: (date[:10], title) -> rel
+    by_date_title: dict[tuple[str, str], str] = {}
+    by_date: dict[str, list[str]] = {}
+    for n in notes:
+        d = n.get("date", "")[:10]
+        t = n.get("title", "").strip()
+        by_date_title[(d, t)] = n["rel"]
+        by_date.setdefault(d, []).append(n["rel"])
+
+    rels: set[str] = set()
+    for date, title in keys:
+        # Exact match on date+title
+        rel = by_date_title.get((date, title))
+        if rel:
+            rels.add(rel)
+            continue
+        # Fallback: if only one note on that date, use it
+        candidates = by_date.get(date, [])
+        if len(candidates) == 1:
+            rels.add(candidates[0])
+    return rels
 
 
 # ---- REST endpoints ----
