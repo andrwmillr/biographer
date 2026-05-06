@@ -149,9 +149,11 @@ def _count_eligible(corpus_id: str | None = None) -> int:
     notes = wb.load_corpus_notes(corpus_id)
     count = 0
     for n in notes:
-        label = n["rel"].split("/", 1)[0] if "/" in n["rel"] else "_"
-        if label in HIGH_SIGNAL_LABELS:
-            count += 1
+        if "/" in n["rel"]:
+            label = n["rel"].split("/", 1)[0]
+            if label not in HIGH_SIGNAL_LABELS:
+                continue
+        count += 1
     return count
 
 
@@ -513,9 +515,10 @@ def _eligible_notes(corpus_id: str | None) -> tuple[list[dict], set[str]]:
 
     eligible = []
     for n in notes:
-        label = n["rel"].split("/", 1)[0] if "/" in n["rel"] else "_"
-        if label not in HIGH_SIGNAL_LABELS:
-            continue
+        if "/" in n["rel"]:
+            label = n["rel"].split("/", 1)[0]
+            if label not in HIGH_SIGNAL_LABELS:
+                continue
         if n["rel"] in seen:
             continue
         body = wb.parse_note_body(n["rel"], corpus_id)
@@ -577,9 +580,12 @@ def _browse_eligible(corpus_id: str | None, *, dismissed_only: bool = False) -> 
 
     eligible = []
     for n in notes:
-        label = n["rel"].split("/", 1)[0] if "/" in n["rel"] else "_"
-        if label not in HIGH_SIGNAL_LABELS:
-            continue
+        # Filter by high-signal label when notes live in subfolders (e.g. journal/, creative/).
+        # Skip the filter for flat corpora (sample corpora) where rels have no folder prefix.
+        if "/" in n["rel"]:
+            label = n["rel"].split("/", 1)[0]
+            if label not in HIGH_SIGNAL_LABELS:
+                continue
         in_seen = n["rel"] in seen
         if dismissed_only and not in_seen:
             continue
