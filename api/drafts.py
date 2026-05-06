@@ -17,15 +17,14 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import ClaudeAgentOptions
 from api.config import KICKOFF_PATH, PREFACE_PATH, REPO
 from api.commonplace import load_passages_for_era
 from api.corpora import (
     _load_state,
     _session_corpus_id,
+    authorize_ws_corpus,
     corpus_dir,
-    is_sample_corpus,
     require_corpus_access,
     require_writable,
 )
@@ -397,6 +396,7 @@ async def session(ws: WebSocket):
 
     session_slug = first.get("session")
     auth_token = first.get("token")
+    corpus_secret = first.get("secret")
     if not session_slug:
         await reject("missing session in start message")
         return
@@ -405,21 +405,12 @@ async def session(ws: WebSocket):
     except HTTPException as e:
         await reject(e.detail)
         return
-    # Auth gate: samples are open to anonymous visitors; others need ownership.
-    if not is_sample_corpus(session_slug):
-        if not auth_token:
-            await reject("auth required: missing token in start message")
-            return
-        state = _gc_auth(_load_auth())
-        record = state["sessions"].get(auth_token)
-        if not record:
-            await reject("invalid or expired auth token")
-            return
-        if session_slug not in state["users"].get(record["email"], []):
-            await reject("this corpus is not owned by the authenticated user")
-            return
+    try:
+        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
     corpus_id = _session_corpus_id(session_slug)
-    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
 
     sess: Session | None = None
     era = first["era"]
@@ -526,6 +517,7 @@ async def session(ws: WebSocket):
                 email=user_email,
                 era=era,
             )
+            sess.can_promote = can_write
             tlog("session_start", kind="era", email=user_email,
                  corpus=corpus_id, era=era, model=model,
                  resumed=bool(resume_run_rel),
@@ -558,11 +550,9 @@ async def session(ws: WebSocket):
                 # Wait for any in-flight write so we don't promote a
                 # half-streamed output.md.
                 await sess.wait_idle()
-                if is_sample_corpus(session_slug):
-                    # Samples: lock the draft for this visitor's session
-                    # but don't promote — one visitor's finalize shouldn't
-                    # overwrite the corpus's canonical baseline for
-                    # everyone else.
+                if not can_write:
+                    # Public/secret trial sessions lock the draft for this
+                    # visitor but don't promote shared canonical files.
                     output_md = sess.run_dir / "output.md"
                     content = (
                         output_md.read_text(encoding="utf-8")
@@ -707,6 +697,7 @@ async def preface_session(ws: WebSocket):
 
     session_slug = first.get("session")
     auth_token = first.get("token")
+    corpus_secret = first.get("secret")
     if not session_slug:
         await reject("missing session in start message")
         return
@@ -715,20 +706,12 @@ async def preface_session(ws: WebSocket):
     except HTTPException as e:
         await reject(e.detail)
         return
-    if not is_sample_corpus(session_slug):
-        if not auth_token:
-            await reject("auth required: missing token in start message")
-            return
-        state = _gc_auth(_load_auth())
-        record = state["sessions"].get(auth_token)
-        if not record:
-            await reject("invalid or expired auth token")
-            return
-        if session_slug not in state["users"].get(record["email"], []):
-            await reject("this corpus is not owned by the authenticated user")
-            return
+    try:
+        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
     corpus_id = _session_corpus_id(session_slug)
-    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
 
     sess: Session | None = None
     try:
@@ -799,6 +782,7 @@ async def preface_session(ws: WebSocket):
                 background_loop=_era_watch,  # same output.md watcher
                 email=user_email,
             )
+            sess.can_promote = can_write
             tlog("session_start", kind="preface", email=user_email,
                  corpus=corpus_id, model=model,
                  run_id=prep["run_rel"])
@@ -826,6 +810,20 @@ async def preface_session(ws: WebSocket):
                     await sess.query(text)
             elif mtype == "finalize":
                 await sess.wait_idle()
+                if not can_write:
+                    output_md = sess.run_dir / "output.md"
+                    content = (
+                        output_md.read_text(encoding="utf-8")
+                        if output_md.exists() else ""
+                    )
+                    await sess.emit({
+                        "type": "finalized",
+                        "content": content,
+                        "location": str(output_md.relative_to(REPO)),
+                        "words": len(content.split()),
+                        "overwritten": False,
+                    })
+                    continue
                 try:
                     promoted = _promote_preface(sess.run_dir, corpus_id)
                 except ValueError as exc:

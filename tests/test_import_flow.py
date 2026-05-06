@@ -10,6 +10,7 @@ Run from _web/:
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import sys
 import tempfile
@@ -605,6 +606,78 @@ def test_sample_corpus_blocks_writes(client: TestClient):
 
     # And the on-disk corpus is untouched.
     assert (_test_corpora_root / slug).exists()
+
+
+def test_sample_corpus_blocks_commonplace_mutations(client: TestClient):
+    """Public-readable samples must not let anonymous visitors edit notes or
+    mutate commonplace state."""
+    slug = "c_7777777777777777"
+    cdir = _lay_down_sample(slug)
+    note_path = cdir / "notes" / "1850-06-01.md"
+    original = note_path.read_text(encoding="utf-8")
+    headers = {"X-Corpus-Session": slug}
+
+    probes = [
+        client.post("/commonplace/dismiss?rel=1850-06-01.md", headers=headers),
+        client.post(
+            "/commonplace/passage?date=1850-06-01&era=Era%20One&title=First&body=quote&rel=1850-06-01.md",
+            headers=headers,
+        ),
+        client.put("/commonplace/note?rel=1850-06-01.md&body=CHANGED", headers=headers),
+        client.post(
+            "/commonplace/stage?rel=1850-06-01.md&date=1850-06-01&era=Era%20One&title=First&body=body",
+            headers=headers,
+        ),
+        client.post("/commonplace/reshuffle", headers=headers),
+    ]
+
+    for r in probes:
+        assert r.status_code == 403, r.text
+        assert "sample" in r.json()["detail"].lower()
+    assert note_path.read_text(encoding="utf-8") == original
+
+
+def test_sample_corpus_allows_trial_compute_without_promotion_rights():
+    """Public samples can run trial agent sessions, but cannot promote
+    shared/canonical files."""
+    slug = "c_8888888888888888"
+    _lay_down_sample(slug)
+
+    email, can_write = corpora.authorize_ws_corpus(slug, auth_token=None)
+    assert email == "(sample)"
+    assert can_write is False
+
+
+def test_secret_corpus_is_readable_but_not_writable_without_owner_auth(client: TestClient):
+    """The poems-style secret unlocks read access only; API writes still need
+    an authenticated owner."""
+    slug = "c_poems"
+    cdir = _lay_down_sample(slug, sample=False)
+    meta_path = cdir / "_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["secret"] = "poems-secret"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    note_path = cdir / "notes" / "1850-06-01.md"
+    original = note_path.read_text(encoding="utf-8")
+
+    r = client.get("/corpus", headers={"X-Corpus-Session": slug})
+    assert r.status_code == 404
+
+    headers = {"X-Corpus-Session": slug, "X-Corpus-Secret": "poems-secret"}
+    r = client.get("/corpus", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.put("/commonplace/note?rel=1850-06-01.md&body=CHANGED", headers=headers)
+    assert r.status_code == 401, r.text
+    assert note_path.read_text(encoding="utf-8") == original
+
+    email, can_write = corpora.authorize_ws_corpus(
+        slug,
+        auth_token=None,
+        corpus_secret="poems-secret",
+    )
+    assert email == "(secret)"
+    assert can_write is False
 
 
 def test_sample_flag_does_not_leak_to_andrew(client: TestClient):

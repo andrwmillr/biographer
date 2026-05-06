@@ -102,6 +102,7 @@ class Session:
     last_attached_at: float = field(default_factory=time.time, init=False)
     cumulative_cost: float = field(default=0.0, init=False)
     finalize_pending: bool = field(default=False, init=False)
+    can_promote: bool = field(default=True, init=False)
     # status: starting | running | finalized | error | abandoned
     status: str = field(default="starting", init=False)
 

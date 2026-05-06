@@ -8,7 +8,7 @@ import {
 } from "react-resizable-panels";
 import { Markdown, formatTool } from "./markdown";
 import { NotesTimeline } from "./NotesTimeline";
-import { authHeaders, getAuthToken, getSession } from "./auth";
+import { authHeaders, getAuthToken, getCorpusSecret, getSession } from "./auth";
 import type {
   FinalizedInfo,
   LogItem,
@@ -388,7 +388,8 @@ export function ChatWorkspace({
     ws.onopen = () => {
       const session = getSession() || "";
       const token = getAuthToken() || "";
-      const base: Record<string, unknown> = { type: "start", session, token, model: effectiveModel };
+      const secret = getCorpusSecret() || "";
+      const base: Record<string, unknown> = { type: "start", session, token, secret, model: effectiveModel };
       if (resuming) {
         base.resume = true;
         base.run_id = opts.resumeRunId;

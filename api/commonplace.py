@@ -19,13 +19,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from api.auth import _gc_auth, _load_auth
 from api.config import COMMONPLACE_PATH, REPO
 from api.corpora import (
     _session_corpus_id,
+    authorize_ws_corpus,
     corpus_dir,
-    is_sample_corpus,
     require_corpus_access,
+    require_writable,
 )
 from claude_agent_sdk import ClaudeAgentOptions
 from core import corpus as wb
@@ -315,8 +315,11 @@ async def _commonplace_watch(session: Session) -> None:
         if session.finalize_pending:
             session.finalize_pending = False
             try:
-                _persist = not is_sample_corpus(session.corpus_id)
-                result = _promote(session.run_dir, session.corpus_id, persist=_persist)
+                result = _promote(
+                    session.run_dir,
+                    session.corpus_id,
+                    persist=session.can_promote,
+                )
                 await session.emit({
                     "type": "finalized",
                     "content": result["content"],
@@ -675,7 +678,7 @@ def browse_dismissed(
 @router.post("/commonplace/undismiss")
 def undismiss_note(
     rel: str = Query(...),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Remove a note from the seen/dismissed set."""
     corpus_id = _session_corpus_id(session)
@@ -702,7 +705,7 @@ CURATE_CANDIDATE_CAP = CHAR_CAP * 3
 
 
 @router.post("/commonplace/curate")
-async def curate_notes(session: str = Depends(require_corpus_access)):
+async def curate_notes(session: str = Depends(require_writable)):
     """Deal notes filtered by LLM taste-matching against past highlights."""
     from anthropic import AsyncAnthropic
 
@@ -793,7 +796,7 @@ def reject_passage(
     date: str = Query("", description="YYYY-MM-DD"),
     title: str = Query(""),
     body: str = Query(""),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Remove a passage from the commonplace book."""
     corpus_id = _session_corpus_id(session)
@@ -805,7 +808,7 @@ def reject_passage(
 @router.post("/commonplace/dismiss")
 def dismiss_note(
     rel: str = Query("", description="Note rel path"),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Mark a single note as seen (dismissed without highlighting)."""
     corpus_id = _session_corpus_id(session)
@@ -824,7 +827,7 @@ def add_passage(
     title: str = Query(""),
     body: str = Query(""),
     rel: str = Query("", description="Note rel path"),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Add a user-highlighted passage to the commonplace book."""
     corpus_id = _session_corpus_id(session)
@@ -843,7 +846,7 @@ def add_passage(
 def edit_note(
     rel: str = Query("", description="Note rel path"),
     body: str = Query(""),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Update a note's body, preserving its frontmatter."""
     corpus_id = _session_corpus_id(session)
@@ -881,7 +884,7 @@ def stage_note(
     title: str = Query(""),
     body: str = Query(""),
     highlight: str = Query("", description="Highlighted fragment, or empty for full note"),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Add a note to the staging area. If the note is already staged,
     append the highlight to its list."""
@@ -917,7 +920,7 @@ def stage_note(
 @router.delete("/commonplace/stage")
 def unstage_note(
     rel: str = Query(""),
-    session: str = Depends(require_corpus_access),
+    session: str = Depends(require_writable),
 ):
     """Remove a note from the staging area."""
     corpus_id = _session_corpus_id(session)
@@ -930,7 +933,7 @@ def unstage_note(
 
 
 @router.post("/commonplace/staging/clear")
-def clear_staging(session: str = Depends(require_corpus_access)):
+def clear_staging(session: str = Depends(require_writable)):
     """Empty the staging area."""
     corpus_id = _session_corpus_id(session)
     _save_staging([], corpus_id)
@@ -950,7 +953,7 @@ def get_progress(session: str = Depends(require_corpus_access)):
 
 
 @router.post("/commonplace/reshuffle")
-def reshuffle(session: str = Depends(require_corpus_access)):
+def reshuffle(session: str = Depends(require_writable)):
     """Clear all seen state — every note becomes eligible again."""
     corpus_id = _session_corpus_id(session)
     _save_seen(set(), corpus_id)
@@ -987,6 +990,7 @@ async def commonplace_session(ws: WebSocket):
 
     session_slug = first.get("session")
     auth_token = first.get("token")
+    corpus_secret = first.get("secret")
     if not session_slug:
         await reject("missing session in start message")
         return
@@ -996,22 +1000,13 @@ async def commonplace_session(ws: WebSocket):
         await reject(e.detail)
         return
 
-    if not is_sample_corpus(session_slug):
-        if not auth_token:
-            await reject("auth required")
-            return
-        state = _gc_auth(_load_auth())
-        record = state["sessions"].get(auth_token)
-        if not record:
-            await reject("invalid or expired auth token")
-            return
-        if session_slug not in state["users"].get(record["email"], []):
-            await reject("corpus not owned by authenticated user")
-            return
+    try:
+        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
     corpus_id = _session_corpus_id(session_slug)
-    sample = is_sample_corpus(session_slug)
-    persist = not sample
-    user_email = record["email"] if not sample else "(sample)"
+    persist = can_write
 
     session: Session | None = None
     try:
@@ -1125,6 +1120,7 @@ async def commonplace_session(ws: WebSocket):
                 background_loop=_commonplace_watch,
                 email=user_email,
             )
+            session.can_promote = can_write
             tlog("session_start", kind="commonplace", email=user_email,
                  corpus=corpus_id, model=model, run_id=run_rel)
             await session.attach(ws)

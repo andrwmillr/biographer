@@ -15,7 +15,7 @@ from pathlib import Path
 
 from api import config
 import yaml
-from api.auth import _load_auth, get_auth_optional
+from api.auth import _gc_auth, _load_auth, get_auth_optional
 from api.config import ADMIN_EMAILS
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -105,12 +105,60 @@ def require_corpus_access(
     return session
 
 
-def require_writable(session: str = Depends(require_corpus_access)) -> str:
-    """Gate destructive / compute-spending operations. Sample corpora are
-    read-only — no eras replacement, no wipe. Secret-protected corpora
-    allow writes (the secret itself is the gate)."""
+def _owner_email_for_token(session: str, auth_token: str | None) -> str | None:
+    if not auth_token:
+        return None
+    state = _gc_auth(_load_auth())
+    record = state["sessions"].get(auth_token)
+    if not record:
+        return None
+    email = record["email"]
+    if session not in state["users"].get(email, []):
+        return None
+    return email
+
+
+def authorize_ws_corpus(
+    session: str,
+    auth_token: str | None,
+    corpus_secret: str | None = None,
+) -> tuple[str, bool]:
+    """Validate WebSocket start access.
+
+    Returns (email_label, can_write). Public samples and matching
+    secret-backed corpora can start trial compute sessions, but they cannot
+    promote shared/canonical files. Authenticated owners can both compute and
+    persist.
+    """
+    corpus_dir(session)
+    owner_email = _owner_email_for_token(session, auth_token)
+    if owner_email:
+        return owner_email, True
+    if is_sample_corpus(session):
+        return "(sample)", False
+    secret = _get_corpus_secret(session)
+    if secret:
+        if corpus_secret == secret:
+            return "(secret)", False
+        raise HTTPException(404, "not found")
+    if auth_token:
+        raise HTTPException(403, "this corpus is not owned by the authenticated user")
+    raise HTTPException(401, "auth required: missing token in start message")
+
+
+def require_writable(
+    session: str = Depends(get_session),
+    auth_email: str | None = Depends(get_auth_optional),
+) -> str:
+    """Gate destructive / compute-spending operations to corpus owners."""
+    corpus_dir(session)
     if is_sample_corpus(session):
         raise HTTPException(403, "sample corpora are read-only")
+    if auth_email is None:
+        raise HTTPException(401, "write access requires owner auth")
+    state = _load_auth()
+    if session not in state["users"].get(auth_email, []):
+        raise HTTPException(403, "this corpus is not owned by the authenticated user")
     return session
 
 

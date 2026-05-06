@@ -24,7 +24,6 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from api.auth import _gc_auth, _load_auth
 from claude_agent_sdk import ClaudeAgentOptions
 from api.config import (
     CURATE_PATH,
@@ -35,8 +34,8 @@ from api.corpora import (
     _load_state,
     _note_source,
     _session_corpus_id,
+    authorize_ws_corpus,
     corpus_dir,
-    is_sample_corpus,
     require_corpus_access,
 )
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -167,7 +166,15 @@ async def _themes_watch(session: Session) -> None:
         await session.emit({"type": "draft_update", "kind": "themes", "content": content})
         if session.finalize_pending:
             session.finalize_pending = False
-            result = _promote_themes(session.run_dir, session.corpus_id)
+            if session.can_promote:
+                result = _promote_themes(session.run_dir, session.corpus_id)
+            else:
+                result = {
+                    "content": content,
+                    "location": str(p.relative_to(REPO)),
+                    "words": len(content.split()),
+                    "overwritten": False,
+                }
             await session.emit({
                 "type": "finalized",
                 "content": result["content"],
@@ -253,6 +260,7 @@ async def themes_curate(ws: WebSocket):
 
     session_slug = first.get("session")
     auth_token = first.get("token")
+    corpus_secret = first.get("secret")
     if not session_slug:
         await reject("missing session in start message")
         return
@@ -261,21 +269,12 @@ async def themes_curate(ws: WebSocket):
     except HTTPException as e:
         await reject(e.detail)
         return
-    # Auth gate: samples are open to anonymous visitors; others need ownership.
-    if not is_sample_corpus(session_slug):
-        if not auth_token:
-            await reject("auth required: missing token in start message")
-            return
-        state = _gc_auth(_load_auth())
-        record = state["sessions"].get(auth_token)
-        if not record:
-            await reject("invalid or expired auth token")
-            return
-        if session_slug not in state["users"].get(record["email"], []):
-            await reject("this corpus is not owned by the authenticated user")
-            return
+    try:
+        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+    except HTTPException as e:
+        await reject(e.detail)
+        return
     corpus_id = _session_corpus_id(session_slug)
-    user_email = record["email"] if not is_sample_corpus(session_slug) else "(sample)"
 
     session: Session | None = None
     try:
@@ -385,7 +384,16 @@ async def themes_curate(ws: WebSocket):
                     themes_file = run_dir_abs / "themes.md"
                     if themes_file.is_file():
                         try:
-                            result = _promote_themes(run_dir_abs, corpus_id)
+                            if session.can_promote:
+                                result = _promote_themes(run_dir_abs, corpus_id)
+                            else:
+                                content = themes_file.read_text(encoding="utf-8")
+                                result = {
+                                    "content": content,
+                                    "location": str(themes_file.relative_to(REPO)),
+                                    "words": len(content.split()),
+                                    "overwritten": False,
+                                }
                             await session.emit({
                                 "type": "finalized",
                                 "content": result["content"],
@@ -408,6 +416,7 @@ async def themes_curate(ws: WebSocket):
                 background_loop=_themes_watch,
                 email=user_email,
             )
+            session.can_promote = can_write
             tlog("session_start", kind="themes", email=user_email,
                  corpus=corpus_id, model=model,
                  resumed=bool(resume_run_rel),
