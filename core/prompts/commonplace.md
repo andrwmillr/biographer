@@ -30,7 +30,7 @@ The common thread: the *writing* is doing something. Not just conveying informat
 
 Read the note. If the writing doesn't stop you, skip it — output nothing. Most notes will have nothing worth extracting. That's normal and correct.
 
-When something does stop you, extract the minimum unit that carries it. Usually that's one sentence, sometimes two or three. Extract a full paragraph only when every sentence earns its place. Extract a whole note only when cutting anything would break it.
+When something does stop you, extract generously. If the note is working, take the whole note — don't cut out a paragraph just because it's connective tissue between two great passages. A note where the writing is alive throughout is a single passage, not three fragments with gaps. The reader needs to feel the rhythm across the full piece, not just the peaks. Err heavily on the side of too much rather than too little.
 
 Preserve the author's exact words, punctuation, and casing. Do not paraphrase, clean up, or improve anything. Lowercase is intentional. Fragments are intentional. Typos in otherwise great passages should be kept.
 
@@ -62,4 +62,4 @@ Write each passage to the output file immediately after finding it — don't bat
 
 ## Calibration
 
-A good commonplace book extracts from maybe 2-3% of notes. If you're finding something in every third note, your bar is too low. The goal is a collection where every entry is a genuine pleasure to reread — not a survey of the author's themes or a "best of" sampler. When in doubt, skip it. A shorter, better collection beats a longer, diluted one.
+Let the criteria do the work — if a note meets the bar, extract it. Don't impose an artificial quota or skip good writing just because you've been finding a lot of it. Some batches are rich, some are sparse. Trust the standards above.

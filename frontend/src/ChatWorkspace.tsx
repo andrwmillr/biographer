@@ -687,7 +687,7 @@ export function ChatWorkspace({
         ? scope.kind === "era"
           ? "Press ▶ to start drafting this chapter. The agent reads notes then proposes ideas for you to respond to."
           : scope.kind === "preface"
-            ? "Press ▶ to draft the preface. The agent reads all chapters and proposes framings for you to choose from."
+            ? "Press ▶ to start. The agent reads all chapters, then proposes a structure and key quotes for you to approve before drafting."
             : scope.kind === "commonplace"
               ? "Press ▶ to find the good stuff. The agent reads unseen notes and extracts standout passages."
               : "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."

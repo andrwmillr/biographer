@@ -67,6 +67,10 @@ Then end your turn. Don't add commentary or propose next steps after the index.
 - **Form-heavy**: more than 2 themes about writing habits (drafting, journaling modes, letter formats) signals you're describing the container, not the contents. Cut form themes and find what the person keeps *thinking about*.
 - **Headline doing two jobs**: "Falling fast, then writing the aftermath much longer than the thing itself" is interpretation packed into a name. The reader has to parse cleverness to see the pattern. Split: name the pattern plainly ("crushes that produce more writing than dating"), then put the interpretation in the gloss ("the writing outlasts the relationship").
 
+## HARD CONTENT
+
+If the archive contains self-harm, suicidal ideation, or serious crises: do not build themes around them. A theme like "depression" or "suicidality" treats crisis as a recurring pattern to analyze — it's not. At most, a theme about a *related* arc (resilience, isolation, seeking help) can note that hard stretches exist, indirectly and briefly.
+
 ## VOICE
 
 Plain English. No jargon ("signature gesture", "ars poetica"). No stature claims. Imagine handing the proposal to a friend — concrete, specific, easy to push back on.

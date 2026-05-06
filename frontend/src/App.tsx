@@ -51,7 +51,7 @@ export default function App() {
   const [magicLinkLanded, setMagicLinkLanded] = useState(false);
   const [viewMode, _setViewMode] = useState<"eras" | "themes" | "commonplace">(() => {
     const stored = localStorage.getItem("viewMode");
-    return stored === "eras" ? "eras" : stored === "commonplace" ? "commonplace" : "themes";
+    return stored === "eras" ? "eras" : stored === "themes" ? "themes" : "commonplace";
   });
   const setViewMode = (v: "eras" | "themes" | "commonplace") => {
     _setViewMode(v);
@@ -767,13 +767,24 @@ export default function App() {
                   <button
                     className={
                       "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
+                      (viewMode === "commonplace"
+                        ? "text-stone-700 border-b-2 border-stone-700"
+                        : "text-stone-400 hover:text-stone-700")
+                    }
+                    onClick={() => setViewMode("commonplace")}
+                  >
+                    Curate
+                  </button>
+                  <button
+                    className={
+                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
                       (viewMode === "themes"
                         ? "text-stone-700 border-b-2 border-stone-700"
                         : "text-stone-400 hover:text-stone-700")
                     }
                     onClick={() => setViewMode("themes")}
                   >
-                    Themes
+                    Outline
                   </button>
                   <div className="relative" ref={chaptersMenuRef}>
                     <button
@@ -793,7 +804,7 @@ export default function App() {
                       aria-haspopup={viewMode === "eras" ? "menu" : undefined}
                       aria-expanded={viewMode === "eras" ? chaptersOpen : undefined}
                     >
-                      Chapters
+                      Write
                       {viewMode === "eras" && (
                         <svg className="ml-1 inline-block w-3 h-3 text-stone-600" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
                       )}
@@ -866,17 +877,6 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <button
-                    className={
-                      "font-sans text-xs uppercase tracking-wider px-3 py-1.5 transition-colors " +
-                      (viewMode === "commonplace"
-                        ? "text-stone-700 border-b-2 border-stone-700"
-                        : "text-stone-400 hover:text-stone-700")
-                    }
-                    onClick={() => setViewMode("commonplace")}
-                  >
-                    Highlights
-                  </button>
                 </div>
               </div>
               {(corpusInfo.title || corpusInfo.slug) && (
