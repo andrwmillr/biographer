@@ -96,7 +96,6 @@ export function ChatWorkspace({
   const [spawned, setSpawned] = useState<SpawnedInfo | null>(null);
   const [cost, setCost] = useState<number>(0);
   const [error, setError] = useState<string>("");
-  const [finalized, setFinalized] = useState<FinalizedInfo | null>(null);
   const [canonicalDraft, setCanonicalDraft] = useState<string>("");
   const draftViewKey = `draftView:${scope.kind}`;
   const [draftView, _setDraftView] = useState<"canonical" | "working">(() => {
@@ -355,7 +354,6 @@ export function ChatWorkspace({
     setSpawned(null);
     setCost(0);
     setError("");
-    setFinalized(null);
     setHighlightDate("");
     setHighlightContext("");
     narrationBufRef.current = "";
@@ -518,7 +516,6 @@ export function ChatWorkspace({
           words: payload.words,
           overwritten: payload.overwritten,
         };
-        setFinalized(info);
         setDraft(info.content);
         setCanonicalDraft(info.content);
         setDraftView("working");
@@ -606,7 +603,6 @@ export function ChatWorkspace({
     setWsStatus("idle");
     setPhase("pre-gen");
     setSpawned(null);
-    setFinalized(null);
     if (replyRef.current) replyRef.current.value = "";
     setReplyHasText(false);
     setError("");
