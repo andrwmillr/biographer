@@ -41,8 +41,14 @@ def require_admin(email: str | None = Depends(get_auth_optional)) -> str:
 
 
 def _valid_slug(slug: str) -> bool:
-    """Accept legacy slugs (andrew, poems) and c_-prefixed slugs."""
-    return slug == "andrew" or bool(re.fullmatch(r"c_[0-9a-z_]+", slug))
+    """Accept only c_-namespaced imported/sample corpus slugs.
+
+    The public web API deliberately does not accept legacy local corpus
+    names such as "andrew". Local CLI tooling may still target those
+    directories explicitly through core.corpus, but internet-facing routes
+    must not expose them through X-Corpus-Session.
+    """
+    return bool(re.fullmatch(r"c_[0-9a-z_]+", slug))
 
 
 def is_sample_corpus(slug: str) -> bool:
@@ -64,6 +70,8 @@ def is_sample_corpus(slug: str) -> bool:
 
 def _get_corpus_secret(slug: str) -> str | None:
     """Return the secret key for a corpus if one is configured, else None."""
+    if not _valid_slug(slug):
+        return None
     meta_path = config.CORPORA_ROOT / slug / "_meta.json"
     if not meta_path.exists():
         return None
@@ -80,6 +88,8 @@ def require_corpus_access(
     x_corpus_secret: str | None = Header(None),
 ) -> str:
     """Gate on (sample corpus) OR (secret key) OR (auth token + ownership)."""
+    if not _valid_slug(session):
+        raise HTTPException(401, "invalid session")
     if is_sample_corpus(session):
         return session
     corpus_secret = _get_corpus_secret(session)
@@ -128,7 +138,7 @@ def _session_corpus_id(session: str) -> str:
     return session
 
 
-def _load_state(corpus_id: str = "andrew"):
+def _load_state(corpus_id: str):
     notes = wb.load_corpus_notes(corpus_id)
     wb.apply_date_overrides(notes, corpus_id)
     verdicts = wb.load_authorship(corpus_id)
@@ -144,7 +154,7 @@ def _load_state(corpus_id: str = "andrew"):
     return notes, by_era, eras
 
 
-def _note_source(rel: str, corpus_id: str = "andrew") -> str:
+def _note_source(rel: str, corpus_id: str) -> str:
     path = wb._safe_note_path(rel, corpus_id)
     if path is None:
         return ""
@@ -290,6 +300,8 @@ def list_samples(request: Request, x_corpus_secret: str | None = Header(None)):
         return out
     for d in sorted(config.CORPORA_ROOT.iterdir()):
         if not d.is_dir():
+            continue
+        if not _valid_slug(d.name):
             continue
         meta_path = d / "_meta.json"
         if not meta_path.exists():

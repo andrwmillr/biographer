@@ -42,15 +42,15 @@ HIGH_SIGNAL_LABELS = {"journal", "creative", "poetry", "letter", "fiction", "oth
 CHAR_CAP = 75_000
 
 
-def _commonplace_base(corpus_id: str | None = None) -> Path:
+def _commonplace_base(corpus_id: str) -> Path:
     return wb.corpus_root(corpus_id) / "claude" / "commonplace"
 
 
-def _seen_path(corpus_id: str | None = None) -> Path:
+def _seen_path(corpus_id: str) -> Path:
     return _commonplace_base(corpus_id) / "seen.json"
 
 
-def _load_seen(corpus_id: str | None = None) -> set[str]:
+def _load_seen(corpus_id: str) -> set[str]:
     p = _seen_path(corpus_id)
     if not p.exists():
         return set()
@@ -60,7 +60,7 @@ def _load_seen(corpus_id: str | None = None) -> set[str]:
         return set()
 
 
-def _save_seen(seen: set[str], corpus_id: str | None = None) -> None:
+def _save_seen(seen: set[str], corpus_id: str) -> None:
     p = _seen_path(corpus_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
@@ -68,11 +68,11 @@ def _save_seen(seen: set[str], corpus_id: str | None = None) -> None:
     tmp.replace(p)
 
 
-def _staging_path(corpus_id: str | None = None) -> Path:
+def _staging_path(corpus_id: str) -> Path:
     return _commonplace_base(corpus_id) / "staging.json"
 
 
-def _load_staging(corpus_id: str | None = None) -> list[dict]:
+def _load_staging(corpus_id: str) -> list[dict]:
     p = _staging_path(corpus_id)
     if not p.exists():
         return []
@@ -83,7 +83,7 @@ def _load_staging(corpus_id: str | None = None) -> list[dict]:
         return []
 
 
-def _save_staging(entries: list[dict], corpus_id: str | None = None) -> None:
+def _save_staging(entries: list[dict], corpus_id: str) -> None:
     p = _staging_path(corpus_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
@@ -98,7 +98,7 @@ def _norm_quotes(s: str) -> str:
 
 
 def _remove_passage(date: str, title: str, body: str,
-                    corpus_id: str | None = None) -> bool:
+                    corpus_id: str) -> bool:
     """Remove a passage block from canonical.md. Returns True if found.
     Matches on date + title + body (quote-normalized) so duplicate
     headers with different bodies are disambiguated."""
@@ -133,7 +133,7 @@ def _remove_passage(date: str, title: str, body: str,
 
 
 def _add_passage(date: str, era: str, title: str, body: str,
-                 corpus_id: str | None = None) -> None:
+                 corpus_id: str) -> None:
     """Append a passage block to canonical.md."""
     canonical = _commonplace_base(corpus_id) / "canonical.md"
     canonical.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +144,7 @@ def _add_passage(date: str, era: str, title: str, body: str,
     canonical.write_text(existing + block, encoding="utf-8")
 
 
-def _count_eligible(corpus_id: str | None = None) -> int:
+def _count_eligible(corpus_id: str) -> int:
     """Count high-signal notes in the corpus."""
     notes = wb.load_corpus_notes(corpus_id)
     count = 0
@@ -157,7 +157,7 @@ def _count_eligible(corpus_id: str | None = None) -> int:
     return count
 
 
-def _prepare_run(corpus_id: str | None = None) -> dict:
+def _prepare_run(corpus_id: str) -> dict:
     """Build the commonplace input from unseen notes and create a run dir."""
     from core.sampling import build_input
 
@@ -200,7 +200,7 @@ def _prepare_run(corpus_id: str | None = None) -> dict:
     }
 
 
-def _build_kickoff(run_dir: Path, corpus_sample: str, corpus_id: str | None,
+def _build_kickoff(run_dir: Path, corpus_sample: str, corpus_id: str,
                     guidance: str | None = None) -> str:
     guidance_block = ""
     if guidance:
@@ -236,7 +236,7 @@ def _build_kickoff(run_dir: Path, corpus_sample: str, corpus_id: str | None,
     )
 
 
-def _promote_empty(run_dir: Path, corpus_id: str | None,
+def _promote_empty(run_dir: Path, corpus_id: str,
                    persist: bool = True) -> None:
     """Mark sampled notes as seen without adding any passages.
     Used when triage finds nothing worth extracting."""
@@ -250,7 +250,7 @@ def _promote_empty(run_dir: Path, corpus_id: str | None,
         _save_seen(seen, corpus_id)
 
 
-def _promote(run_dir: Path, corpus_id: str | None,
+def _promote(run_dir: Path, corpus_id: str,
              persist: bool = True) -> dict:
     """Append this run's passages to the canonical commonplace book and
     mark the sampled notes as seen.  When persist=False (sample corpora),
@@ -331,7 +331,7 @@ async def _commonplace_watch(session: Session) -> None:
 _PASSAGE_HEADER_RE = re.compile(r"^### \[(\d{4}-\d{2}-\d{2})\] · .+ · (.*)$", re.MULTILINE)
 
 
-def load_highlighted_keys(corpus_id: str | None = None) -> set[tuple[str, str]]:
+def load_highlighted_keys(corpus_id: str) -> set[tuple[str, str]]:
     """Parse canonical.md and return (date, title) pairs for every note
     that has at least one highlighted passage."""
     canonical = _commonplace_base(corpus_id) / "canonical.md"
@@ -341,7 +341,7 @@ def load_highlighted_keys(corpus_id: str | None = None) -> set[tuple[str, str]]:
     return {(m.group(1), m.group(2).strip()) for m in _PASSAGE_HEADER_RE.finditer(text)}
 
 
-def load_passages_for_era(era_name: str, corpus_id: str | None = None) -> str:
+def load_passages_for_era(era_name: str, corpus_id: str) -> str:
     """Return the passage blocks from canonical.md whose dates fall
     within the given era. Used to inject highlights into the chapter
     drafting prompt."""
@@ -364,7 +364,7 @@ def load_passages_for_era(era_name: str, corpus_id: str | None = None) -> str:
     return "\n\n".join(out)
 
 
-def load_all_passages(corpus_id: str | None = None) -> str:
+def load_all_passages(corpus_id: str) -> str:
     """Return the full canonical.md content, or empty string if none."""
     canonical = _commonplace_base(corpus_id) / "canonical.md"
     if not canonical.exists():
@@ -372,7 +372,7 @@ def load_all_passages(corpus_id: str | None = None) -> str:
     return canonical.read_text(encoding="utf-8").strip()
 
 
-def load_highlighted_rels(corpus_id: str | None = None) -> set[str]:
+def load_highlighted_rels(corpus_id: str) -> set[str]:
     """Return the set of note rels that have commonplace passages.
     Matches on (date, title); falls back to date-only when a title
     doesn't match any note (LLM may have cleaned/shortened it)."""
@@ -408,7 +408,7 @@ def load_highlighted_rels(corpus_id: str | None = None) -> set[str]:
 
 # ---- REST endpoints ----
 
-def _build_guidance_map(corpus_id: str | None = None) -> list[dict]:
+def _build_guidance_map(corpus_id: str) -> list[dict]:
     """Scan run dirs and return an ordered list mapping passage ranges to prompts.
 
     Each entry: {"guidance": str|null, "count": int} — passage count for that run.
@@ -503,7 +503,7 @@ def get_note(
     return _make_result(date_matches[0])
 
 
-def _eligible_notes(corpus_id: str | None) -> tuple[list[dict], set[str]]:
+def _eligible_notes(corpus_id: str) -> tuple[list[dict], set[str]]:
     """Return (eligible_notes, seen_set) for the corpus.
     Each note dict has rel, date, title, era, body."""
     import random as _rand
@@ -554,7 +554,7 @@ def _sample_up_to(eligible: list[dict], cap: int) -> list[dict]:
 
 
 def _deal_response(sampled: list[dict], seen: set[str],
-                   corpus_id: str | None) -> dict:
+                   corpus_id: str) -> dict:
     """Build the response dict for deal/curate endpoints."""
     total = _count_eligible(corpus_id)
     return {
@@ -569,7 +569,7 @@ def _deal_response(sampled: list[dict], seen: set[str],
     }
 
 
-def _browse_eligible(corpus_id: str | None, *, dismissed_only: bool = False) -> list[dict]:
+def _browse_eligible(corpus_id: str, *, dismissed_only: bool = False) -> list[dict]:
     """Return eligible notes sorted chronologically (no body).
     By default skips dismissed notes; with dismissed_only=True returns only dismissed."""
     seen = _load_seen(corpus_id)

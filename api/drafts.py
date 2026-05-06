@@ -64,7 +64,7 @@ class DraftRequest(BaseModel):
     future: bool = False
 
 
-def _prepare_run(era_name: str, corpus_id: str = "andrew", include_future: bool = False) -> dict:
+def _prepare_run(era_name: str, corpus_id: str, include_future: bool = False) -> dict:
     """Build the prompt inputs and create a fresh run dir on disk.
     Returns {run_dir, run_rel, full_user_msg, notes_count, prior_count,
     digest_count, future_count, future_digest_count, in_chars}."""
@@ -197,7 +197,7 @@ def _promote_era_chapter(run_dir: Path, era_name: str, corpus_id: str) -> dict:
     }
 
 
-def _build_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | None) -> str:
+def _build_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str) -> str:
     """Read KICKOFF.md, substitute __RUN_DIR__, strip checkpoint markers,
     prepend the per-corpus subject identity block, and append the era inputs
     between INPUT-START / INPUT-END. Mirrors run.sh."""
@@ -612,7 +612,7 @@ async def session(ws: WebSocket):
 # Preface session
 # ---------------------------------------------------------------------------
 
-def _prepare_preface_run(corpus_id: str | None = None) -> dict:
+def _prepare_preface_run(corpus_id: str) -> dict:
     """Build the preface input and create a fresh run dir. Returns
     {run_dir, run_rel, full_user_msg, in_chars}."""
     from core.preface import build_preface_input
@@ -630,7 +630,7 @@ def _prepare_preface_run(corpus_id: str | None = None) -> dict:
     }
 
 
-def _build_preface_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | None) -> str:
+def _build_preface_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str) -> str:
     """Build the preface kickoff: subject context + task + inlined material."""
     return (
         wb.subject_context_for(corpus_id)
@@ -652,7 +652,7 @@ def _build_preface_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str | No
     )
 
 
-def _promote_preface(run_dir: Path, corpus_id: str | None) -> dict:
+def _promote_preface(run_dir: Path, corpus_id: str) -> dict:
     """Copy run_dir/output.md → chapters/00_Preface.md."""
     src = run_dir / "output.md"
     if not src.is_file():

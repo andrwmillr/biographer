@@ -48,11 +48,11 @@ from core.telemetry import log as tlog
 router = APIRouter()
 
 
-def _themes_base(corpus_id: str | None = None) -> Path:
+def _themes_base(corpus_id: str) -> Path:
     return wb.corpus_root(corpus_id) / "claude" / "themes"
 
 
-def _prepare_themes_run(top_n: int = 5, corpus_id: str | None = None) -> dict:
+def _prepare_themes_run(top_n: int, corpus_id: str) -> dict:
     """Build the round-1 corpus-themes input message and create a fresh
     themes run dir on disk. Mirrors spin_themes.py's build_input(top_n)
     and OUT_DIR layout.
@@ -76,7 +76,7 @@ def _prepare_themes_run(top_n: int = 5, corpus_id: str | None = None) -> dict:
     }
 
 
-def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str | None) -> str:
+def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str) -> str:
     """Build a single-phase themes kickoff: generate round-1 themes
     inline in chat, then transition to curate orientation. Replaces the
     old two-phase flow (`claude -p` round-1 then curate)."""
@@ -125,7 +125,7 @@ def _build_themes_kickoff(run_dir_abs: Path, corpus_sample: str, corpus_id: str 
     )
 
 
-def _promote_themes(run_dir: Path, corpus_id: str | None) -> dict:
+def _promote_themes(run_dir: Path, corpus_id: str) -> dict:
     """Copy run_dir/themes.md → themes/canonical.md. Called on finalize.
     Mirrors _promote_era_chapter: the canonical path is the only thing
     the read endpoint (`/themes/latest`) ever serves."""

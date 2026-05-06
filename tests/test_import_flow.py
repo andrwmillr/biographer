@@ -79,12 +79,27 @@ def auth_token() -> str:
 # ---- Auth: corpus_dir guard -----------------------------------------------
 
 
-def test_corpus_dir_rejects_missing_andrew_dir():
-    """`andrew` passes the slug-shape gate but must 401 when the dir doesn't
-    exist on disk (it doesn't, in the test tempdir)."""
+def test_corpus_dir_rejects_andrew_slug_even_if_dir_exists():
+    """The public web API never accepts the legacy local `andrew` slug."""
+    (_test_corpora_root / "andrew").mkdir(parents=True, exist_ok=True)
     with pytest.raises(HTTPException) as ex:
         corpora.corpus_dir("andrew")
     assert ex.value.status_code == 401
+
+
+def test_andrew_slug_rejected_even_if_user_state_lists_it(client: TestClient):
+    """Ownership state must not make the legacy local corpus web-addressable."""
+    token = _issue_test_token("owner@example.com")
+    (_test_corpora_root / "andrew" / "notes").mkdir(parents=True, exist_ok=True)
+    state = auth._load_auth()
+    state["users"]["owner@example.com"] = ["andrew"]
+    auth._save_auth(state)
+
+    r = client.get(
+        "/corpus",
+        headers={"X-Corpus-Session": "andrew", "X-Auth-Token": token},
+    )
+    assert r.status_code == 401
 
 
 def test_corpus_dir_rejects_random_strings():
@@ -594,9 +609,15 @@ def test_sample_corpus_blocks_writes(client: TestClient):
 
 def test_sample_flag_does_not_leak_to_andrew(client: TestClient):
     """Even if andrew/_meta.json had `sample: true`, the andrew slug must
-    not be classified as a sample (otherwise it would silently become
-    read-only). The slug-shape gate already excludes it — this confirms."""
+    not become web-addressable as a sample."""
+    d = _test_corpora_root / "andrew"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "_meta.json").write_text('{"sample": true, "title": "Andrew"}')
+
     assert corpora.is_sample_corpus("andrew") is False
+    r = client.get("/samples")
+    assert r.status_code == 200
+    assert all(s["slug"] != "andrew" for s in r.json())
 
 
 def test_non_sample_corpus_still_requires_auth(client: TestClient):
