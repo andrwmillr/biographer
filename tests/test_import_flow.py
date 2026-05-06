@@ -103,6 +103,25 @@ def test_andrew_slug_rejected_even_if_user_state_lists_it(client: TestClient):
     assert r.status_code == 401
 
 
+def test_auth_me_filters_legacy_and_missing_corpus_slugs(client: TestClient):
+    """The picker should only receive web-addressable corpora."""
+    token = _issue_test_token("owner@example.com")
+    good = "c_0123456789abcdef"
+    (_test_corpora_root / "andrew").mkdir(parents=True, exist_ok=True)
+    (_test_corpora_root / good).mkdir(parents=True, exist_ok=True)
+    (_test_corpora_root / good / "_meta.json").write_text(
+        json.dumps({"title": "Owned corpus"}),
+        encoding="utf-8",
+    )
+    state = auth._load_auth()
+    state["users"]["owner@example.com"] = ["andrew", good, "c_missing0000000000"]
+    auth._save_auth(state)
+
+    r = client.get("/auth/me", headers={"X-Auth-Token": token})
+    assert r.status_code == 200
+    assert r.json()["corpora"] == [{"slug": good, "title": "Owned corpus"}]
+
+
 def test_corpus_dir_rejects_random_strings():
     for bad in ["foo", "c_short", "c_TOOSHORT", "../etc", "", "_other_legacy"]:
         with pytest.raises(HTTPException) as ex:

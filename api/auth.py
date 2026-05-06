@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.error
@@ -25,6 +26,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 router = APIRouter()
+
+WEB_CORPUS_SLUG_RE = re.compile(r"c_[0-9a-z_]+")
 
 
 def _now_ts() -> int:
@@ -226,14 +229,21 @@ def auth_me(email: str = Depends(get_auth)):
     slugs = state["users"].get(email, [])
     corpora = []
     for slug in slugs:
+        # Auth state may contain pre-multi-tenant local corpus names from
+        # before the public API required c_-namespaced slugs. Do not advertise
+        # those to the frontend: selecting them will fail the corpus access
+        # gate, and it leaks legacy local names into the web surface.
+        if not WEB_CORPUS_SLUG_RE.fullmatch(slug):
+            continue
         meta_path = config.CORPORA_ROOT / slug / "_meta.json"
+        if not meta_path.exists():
+            continue
         title: str | None = None
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                title = (meta.get("title") or "").strip() or None
-            except Exception:
-                pass
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            title = (meta.get("title") or "").strip() or None
+        except Exception:
+            pass
         corpora.append({"slug": slug, "title": title})
     return {"email": email, "corpora": corpora}
 

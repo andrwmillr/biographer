@@ -23,6 +23,7 @@ import re
 import shutil
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -66,6 +67,17 @@ GUTENBERG_END_MARKERS = (
     "End of the Project Gutenberg",
     "End of Project Gutenberg",
 )
+
+
+@dataclass
+class Entry:
+    date: str
+    title: str
+    body: str
+
+
+FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)", re.DOTALL)
+TRAILING_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 &\"'.,;:!?()/-]{2,}$")
 
 
 def parse_spec(spec: str, fallback_year: int | None) -> tuple[int, int, int] | None:
@@ -127,7 +139,29 @@ def truncate_at_gutenberg_tail(text: str) -> str:
     return text
 
 
-def split_file(path: Path) -> list[tuple[str, str]]:
+def split_frontmatter(text: str) -> tuple[str, str]:
+    m = FRONTMATTER_RE.match(text)
+    if not m:
+        return "", text
+    title = ""
+    for line in m.group(1).splitlines():
+        k, _, v = line.partition(":")
+        if k.strip() == "title":
+            title = v.strip().strip('"').strip("'")
+            break
+    return title, m.group(2)
+
+
+def format_title(raw: str) -> str:
+    raw = raw.strip().strip(".")
+    return raw.title()
+
+
+def yaml_quote(s: str) -> str:
+    return json.dumps(s, ensure_ascii=False)
+
+
+def split_file(path: Path) -> list[Entry]:
     """Return list of (YYYY-MM-DD, body) split out from a single existing
     note. The first segment keeps the file's original date; later segments
     get dates from their leading italic markers."""
@@ -140,19 +174,22 @@ def split_file(path: Path) -> list[tuple[str, str]]:
 
     text = path.read_text(encoding="utf-8")
     text = truncate_at_gutenberg_tail(text)
+    initial_title, text = split_frontmatter(text)
     lines = text.split("\n")
 
-    out: list[tuple[str, str]] = []
+    out: list[Entry] = []
     cur_body: list[str] = []
+    cur_title = initial_title
 
     def flush():
-        nonlocal cur_body
+        nonlocal cur_body, cur_title
         body = "\n".join(cur_body).rstrip()
         while body.startswith("\n"):
             body = body[1:]
         if body.strip():
-            out.append((cur_date, body))
+            out.append(Entry(cur_date, cur_title, body))
         cur_body = []
+        cur_title = ""
 
     for line in lines:
         stripped = line.strip()
@@ -182,17 +219,71 @@ def split_file(path: Path) -> list[tuple[str, str]]:
     return out
 
 
-def parse_corpus() -> list[tuple[str, str]]:
-    entries: list[tuple[str, str]] = []
+def parse_corpus() -> list[Entry]:
+    entries: list[Entry] = []
     for p in sorted(NOTES.glob("*.md")):
         entries.extend(split_file(p))
     return entries
 
 
-def write_corpus(entries: list[tuple[str, str]], dry_run: bool) -> tuple[int, int]:
-    by_date: dict[str, list[str]] = defaultdict(list)
-    for date, body in entries:
-        by_date[date].append(body)
+def move_stranded_trailing_titles(entries: list[Entry]) -> int:
+    """Move title sections stranded at the end of one dated note onto the
+    following untitled note.
+
+    The Gutenberg source often runs section headings and date markers together
+    inline. Earlier import passes recovered most headings immediately followed
+    by a date, but a few headings with short epigraphs before the date were
+    left at the end of the previous note, e.g. THE POET before Oct. 26, 1837.
+    """
+    moved = 0
+    max_trailing_nonblank = 18
+    for prev, nxt in zip(entries, entries[1:]):
+        if nxt.title:
+            continue
+        lines = prev.body.rstrip().splitlines()
+        nonblank_positions = [i for i, line in enumerate(lines) if line.strip()]
+        if not nonblank_positions:
+            continue
+
+        split_at = None
+        for pos in reversed(nonblank_positions):
+            candidate = lines[pos].strip()
+            trailing_count = sum(1 for i in nonblank_positions if i >= pos)
+            if trailing_count > max_trailing_nonblank:
+                break
+            if TRAILING_HEADING_RE.match(candidate) and not YEAR_RANGE_RE.match(candidate):
+                split_at = pos
+                break
+
+        if split_at is None:
+            continue
+
+        heading = lines[split_at].strip()
+        prefix = "\n".join(lines[split_at + 1:]).strip()
+        remaining = "\n".join(lines[:split_at]).rstrip()
+        if not remaining or not prefix:
+            continue
+
+        prev.body = remaining
+        nxt.title = format_title(heading)
+        nxt.body = f"{prefix}\n\n{nxt.body.lstrip()}".strip()
+        moved += 1
+    return moved
+
+
+def render_entry(entry: Entry) -> str:
+    body = entry.body.strip()
+    if entry.title:
+        return f"---\ntitle: {yaml_quote(entry.title)}\n---\n\n{body}\n"
+    return body + "\n"
+
+
+def write_corpus(entries: list[Entry], dry_run: bool) -> tuple[int, int]:
+    moved = move_stranded_trailing_titles(entries)
+
+    by_date: dict[str, list[Entry]] = defaultdict(list)
+    for entry in entries:
+        by_date[entry.date].append(entry)
 
     n_unique = len(by_date)
     n_total = len(entries)
@@ -201,6 +292,7 @@ def write_corpus(entries: list[tuple[str, str]], dry_run: bool) -> tuple[int, in
         sample = sorted(by_date.keys())
         print(f"  unique dates: {n_unique}")
         print(f"  total entries: {n_total}")
+        print(f"  moved stranded title sections: {moved}")
         print(f"  date range: {sample[0]} → {sample[-1]}")
         from collections import Counter
         years = Counter(d[:4] for d in sample)
@@ -212,7 +304,9 @@ def write_corpus(entries: list[tuple[str, str]], dry_run: bool) -> tuple[int, in
         shutil.rmtree(NOTES)
     NOTES.mkdir(parents=True)
     for date, items in sorted(by_date.items()):
-        out = "\n\n* * *\n\n".join(s.rstrip() for s in items).strip() + "\n"
+        title = next((item.title for item in items if item.title), "")
+        body = "\n\n* * *\n\n".join(item.body.rstrip() for item in items).strip()
+        out = render_entry(Entry(date, title, body))
         (NOTES / f"{date}.md").write_text(out, encoding="utf-8")
 
     h = hashlib.sha256()

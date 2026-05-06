@@ -200,15 +200,16 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
 
   // ---- Load initial data ----
   useEffect(() => {
+    // Read-only corpora still need browse data; readOnly only disables
+    // mutation actions such as save, dismiss, edit, and AI curation.
+    fetch(`${apiBase}/commonplace/browse/index`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.notes) setBrowseIndex(d.notes); })
+      .catch(() => {});
     if (!readOnly) {
       fetch(`${apiBase}/commonplace/staging`, { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => { if (d?.notes) setStaged(d.notes); })
-        .catch(() => {});
-      // Load full corpus index for timeline.
-      fetch(`${apiBase}/commonplace/browse/index`, { headers: authHeaders() })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (d?.notes) setBrowseIndex(d.notes); })
         .catch(() => {});
       // Get dismissed count for toggle.
       fetch(`${apiBase}/commonplace/browse/dismissed?offset=0&limit=1`, { headers: authHeaders() })
@@ -285,7 +286,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
 
   // Load first page on mount.
   useEffect(() => {
-    if (!readOnly) fetchBrowsePage(0);
+    fetchBrowsePage(0);
   }, [apiBase, readOnly]);
 
   // ---- Discover: deal random cards ----
@@ -322,6 +323,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }
 
   function stageNote(note: DealtNote, highlight: string) {
+    if (readOnly) return;
     const isFullNote = highlight === note.body;
     const params = new URLSearchParams({
       rel: note.rel, date: note.date, era: note.era,
@@ -374,6 +376,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }
 
   function dismissNote(rel: string) {
+    if (readOnly) return;
     fetch(`${apiBase}/commonplace/dismiss?${new URLSearchParams({ rel })}`, {
       method: "POST", headers: authHeaders(),
     }).catch(() => {});
@@ -383,6 +386,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }
 
   function undismissNote(rel: string) {
+    if (readOnly) return;
     fetch(`${apiBase}/commonplace/undismiss?${new URLSearchParams({ rel })}`, {
       method: "POST", headers: authHeaders(),
     }).catch(() => {});
@@ -391,6 +395,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }
 
   function unstageNote(s: StagedNote) {
+    if (readOnly) return;
     const params = new URLSearchParams({ rel: s.rel });
     fetch(`${apiBase}/commonplace/stage?${params}`, {
       method: "DELETE",
@@ -403,6 +408,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }
 
   function editNote(rel: string, body: string) {
+    if (readOnly) return;
     const params = new URLSearchParams({ rel, body });
     fetch(`${apiBase}/commonplace/note?${params}`, {
       method: "PUT", headers: authHeaders(),
@@ -558,6 +564,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
               ) : (
                 <NoteBook
                   notes={dismissedNotes}
+                  readOnly={readOnly}
                   index={dismissedSpread}
                   onNavigate={setDismissedSpread}
                   onHighlight={(rel, text) => {
@@ -589,6 +596,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
             ) : (
               <NoteBook
                 notes={readNotes}
+                readOnly={readOnly}
                 index={readSpread}
                 onNavigate={setReadSpread}
                 onHighlight={(rel, text) => {
@@ -622,6 +630,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
             ) : (
               <NoteBook
                 notes={sortedStaged}
+                readOnly={readOnly}
                 index={highlightSpread}
                 onNavigate={setHighlightSpread}
                 onHighlight={(rel, text) => {
@@ -758,6 +767,7 @@ function DealtCard({
 
 function NoteBook({
   notes,
+  readOnly = false,
   index,
   onNavigate,
   onHighlight,
@@ -768,6 +778,7 @@ function NoteBook({
   onFirstPage,
 }: {
   notes: (StagedNote | DealtNote)[];
+  readOnly?: boolean;
   index: number;
   onNavigate: (i: number) => void;
   onHighlight: (rel: string, text: string) => void;
@@ -829,6 +840,7 @@ function NoteBook({
   }, [spread, totalSpreads, onNavigate, onFirstPage, onLastPage]);
 
   function handleMouseUp() {
+    if (readOnly) return;
     const sel = window.getSelection();
     const text = sel?.toString().trim() ?? "";
     const el = flowRef.current;
@@ -926,44 +938,46 @@ function NoteBook({
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          if (editingRel === note.rel) {
-                            onEditSave(note.rel, editDraft);
-                            setEditingRel(null);
-                          } else {
-                            setEditingRel(note.rel);
-                            setEditDraft(note.body);
-                          }
-                        }}
-                        className={
-                          "transition-colors text-sm leading-none " +
-                          (editingRel === note.rel
-                            ? "text-stone-600"
-                            : "text-stone-300 hover:text-stone-500")
-                        }
-                        title={editingRel === note.rel ? "Save edit" : "Edit"}
-                      >
-                        &#x270E;
-                      </button>
-                      {onSave && (
+                    {!readOnly && (
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => onSave(note.rel)}
-                          className="text-stone-300 hover:text-stone-500 transition-colors text-sm leading-none"
-                          title="Save"
+                          onClick={() => {
+                            if (editingRel === note.rel) {
+                              onEditSave(note.rel, editDraft);
+                              setEditingRel(null);
+                            } else {
+                              setEditingRel(note.rel);
+                              setEditDraft(note.body);
+                            }
+                          }}
+                          className={
+                            "transition-colors text-sm leading-none " +
+                            (editingRel === note.rel
+                              ? "text-stone-600"
+                              : "text-stone-300 hover:text-stone-500")
+                          }
+                          title={editingRel === note.rel ? "Save edit" : "Edit"}
                         >
-                          &#x2713;
+                          &#x270E;
                         </button>
-                      )}
-                      <button
-                        onClick={() => onRemove(note.rel)}
-                        className="text-stone-300 hover:text-stone-500 transition-colors text-sm leading-none"
-                        title={onSave ? "Dismiss" : "Remove"}
-                      >
-                        &times;
-                      </button>
-                    </div>
+                        {onSave && (
+                          <button
+                            onClick={() => onSave(note.rel)}
+                            className="text-stone-300 hover:text-stone-500 transition-colors text-sm leading-none"
+                            title="Save"
+                          >
+                            &#x2713;
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onRemove(note.rel)}
+                          className="text-stone-300 hover:text-stone-500 transition-colors text-sm leading-none"
+                          title={onSave ? "Dismiss" : "Remove"}
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {!isUntitled(note.title) && (
                     <h3 className="text-base font-serif font-bold text-stone-700 leading-snug">
@@ -990,7 +1004,7 @@ function NoteBook({
           </div>
 
           {/* Highlight button — positioned over the flow */}
-          {selection && (
+          {!readOnly && selection && (
             <button
               onClick={handleHighlight}
               style={{ top: selection.rect.top, left: selection.rect.left }}
