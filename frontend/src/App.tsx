@@ -57,6 +57,12 @@ export default function App() {
     _setViewMode(v);
     localStorage.setItem("viewMode", v);
   };
+  const applyCorpusInfo = (info: CorpusInfo) => {
+    setCorpusInfo(info);
+    if (info.slug === "c_poems") {
+      setViewMode("commonplace");
+    }
+  };
 
   // ---- Auth + corpus routing ----
   // Modes: loading (bootstrap) → login (no auth) → picker (pick corpus) →
@@ -254,7 +260,7 @@ export default function App() {
         const r = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
         if (r.ok) {
           const info = (await r.json()) as CorpusInfo;
-          setCorpusInfo(info);
+          applyCorpusInfo(info);
           setCorpusMode(info.has_eras ? "ready" : "import");
           // Best-effort: if the user is also authed, refresh their corpora list.
           refreshUser().catch(() => {});
@@ -375,7 +381,7 @@ export default function App() {
       const r = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       const info = (await r.json()) as CorpusInfo;
-      setCorpusInfo(info);
+      applyCorpusInfo(info);
       setCorpusMode(info.has_eras ? "ready" : "import");
     } catch (err) {
       setError(`pick failed: ${(err as Error).message}`);
@@ -544,7 +550,7 @@ export default function App() {
         const r = await fetch(`${API_BASE}/corpus`, { headers: authHeaders() });
         if (r.ok) {
           const info = (await r.json()) as CorpusInfo;
-          setCorpusInfo(info);
+          applyCorpusInfo(info);
           setCorpusMode(info.has_eras ? "ready" : "import");
           refreshUser().catch(() => {});
           return;
@@ -730,7 +736,7 @@ export default function App() {
               apiBase={API_BASE}
               initialInfo={corpusInfo}
               onComplete={(info) => {
-                setCorpusInfo(info);
+                applyCorpusInfo(info);
                 setCorpusMode("ready");
               }}
               onWipe={handleWipe}
