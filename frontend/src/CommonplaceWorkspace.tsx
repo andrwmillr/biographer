@@ -591,7 +591,11 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
               )
             ) : readNotes.length === 0 ? (
               <div className="flex items-center justify-center h-full text-sm text-stone-400 font-sans">
-                {browseTotal === 0 ? "no notes" : "all notes on this page saved or dismissed"}
+                {browseTotal === 0
+                  ? "no notes"
+                  : readOnly
+                    ? "no notes on this page"
+                    : "all notes on this page saved or dismissed"}
               </div>
             ) : (
               <NoteBook
@@ -625,7 +629,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
             /* ---- Highlight: saved notes book ---- */
             staged.length === 0 ? (
               <div className="flex items-center justify-center h-full text-sm text-stone-400 font-sans">
-                no saved notes yet
+                {readOnly ? "highlights are disabled for this read-only corpus" : "no saved notes yet"}
               </div>
             ) : (
               <NoteBook
@@ -648,7 +652,11 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
             /* ---- Discover: dealt cards ---- */
             dealt.length === 0 ? (
               <div className="flex items-center justify-center h-full text-sm text-stone-400 font-sans">
-                {dealing ? "finding notes that match your taste..." : "save 5+ notes in Read to unlock"}
+                {readOnly
+                  ? "discovery is disabled for this read-only corpus"
+                  : dealing
+                    ? "finding notes that match your taste..."
+                    : "save 5+ notes in Read to unlock"}
               </div>
             ) : (
               <div className="p-5">
