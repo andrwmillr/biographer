@@ -533,8 +533,8 @@ export default function App() {
           {main.map(sampleCard)}
         </div>
         {bonus.length > 0 && (
-          <div className="mt-2 flex justify-center">
-            <div className="w-1/2">{bonus.map(sampleCard)}</div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {bonus.map(sampleCard)}
           </div>
         )}
       </div>
@@ -623,8 +623,8 @@ export default function App() {
             ) : (
               <>
                 <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-                  Sign in with your email to import a corpus or come back to one
-                  you've already uploaded.
+                  Sign in with your email to import notes or return to a
+                  corpus you've already uploaded.
                 </p>
                 <form onSubmit={handleRequestLogin}>
                   <label className="block">
@@ -655,7 +655,7 @@ export default function App() {
                 )}
               </>
             )}
-            {!loginSent && renderSamples("Or explore a sample diary")}
+            {!loginSent && renderSamples("Sample diaries")}
           </div>
         </div>
       )}
@@ -665,8 +665,10 @@ export default function App() {
             <h1 className="font-serif text-2xl mb-2">Welcome back</h1>
             <p className="text-stone-600 mb-6 text-sm leading-relaxed">
               Signed in as{" "}
-              <span className="font-mono text-xs">{userEmail}</span>. Pick a
-              corpus to open.
+              <span className="font-mono text-xs">{userEmail}</span>.
+            </p>
+            <p className="mb-3 text-xs uppercase tracking-wider text-stone-500">
+              Your corpora
             </p>
             <ul className="space-y-2">
               {userCorpora.map(({ slug, title }) => (
@@ -700,7 +702,7 @@ export default function App() {
                 onClick={handleImportAnother}
                 className="text-sm text-stone-700 underline hover:text-stone-900"
               >
-                + Import another corpus
+                + Import notes
               </button>
               <button
                 onClick={handleLogout}
@@ -723,12 +725,12 @@ export default function App() {
               <p className="text-stone-600 mb-6 text-sm leading-relaxed">
                 Signed in as{" "}
                 <span className="font-mono text-xs">{userEmail}</span>. Import
-                your own notes below, or browse a sample diary.
+                notes below, or browse a public example.
               </p>
             ) : (
               <p className="text-stone-600 mb-6 text-sm leading-relaxed">
-                Each browser sees only the corpus it imports. Files live on
-                the host's machine.
+                Sign in to save imported corpora to your account, or browse a
+                public example.
               </p>
             )}
             <ImportFlow
