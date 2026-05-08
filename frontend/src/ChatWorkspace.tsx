@@ -29,6 +29,7 @@ type ChatWorkspaceProps = {
   // for themes) is handled by the caller.
   models: readonly string[];
   onModelChange: (m: string) => void;
+  canCompute?: boolean;
   // Called when the server emits `finalized` — used by the eras tab to
   // refetch the era list so chapter date ranges update after a draft is
   // promoted.
@@ -75,6 +76,7 @@ export function ChatWorkspace({
   model,
   models,
   onModelChange,
+  canCompute = true,
   onFinalized,
   draftHeaderSlot,
 }: ChatWorkspaceProps) {
@@ -677,17 +679,25 @@ export function ChatWorkspace({
   function renderPrompter() {
     const enabled = promptStatus === "awaiting_reply";
     const buttonEnabled =
-      promptStatus === "pre-gen" ||
+      (promptStatus === "pre-gen" && canCompute) ||
       (promptStatus === "awaiting_reply" && replyHasText);
     const placeholder =
       promptStatus === "pre-gen"
         ? scope.kind === "era"
-          ? "Press ▶ to start drafting this chapter. The agent reads notes then proposes ideas for you to respond to."
+          ? canCompute
+            ? "Press ▶ to start drafting this chapter. The agent reads notes then proposes ideas for you to respond to."
+            : "This corpus can be read here, but agent runs are disabled."
           : scope.kind === "preface"
-            ? "Press ▶ to start. The agent reads all chapters, then proposes a structure and key quotes for you to approve before drafting."
+            ? canCompute
+              ? "Press ▶ to start. The agent reads all chapters, then proposes a structure and key quotes for you to approve before drafting."
+              : "This corpus can be read here, but agent runs are disabled."
             : scope.kind === "commonplace"
-              ? "Press ▶ to find the good stuff. The agent reads unseen notes and extracts standout passages."
-              : "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
+              ? canCompute
+                ? "Press ▶ to find the good stuff. The agent reads unseen notes and extracts standout passages."
+                : "This corpus can be read here, but agent runs are disabled."
+              : canCompute
+                ? "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
+                : "This corpus can be read here, but agent runs are disabled."
         : promptStatus === "generating"
           ? "thinking…"
           : promptStatus === "finalized"

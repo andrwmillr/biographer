@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 type HeaderMenuProps = {
-  isSample?: boolean;
+  canDelete?: boolean;
+  canEditChapters?: boolean;
   userEmail: string | null;
   onWipe: () => void;
   onLogout: () => void;
@@ -10,7 +11,8 @@ type HeaderMenuProps = {
 };
 
 export function HeaderMenu({
-  isSample = false,
+  canDelete = false,
+  canEditChapters = false,
   userEmail,
   onWipe,
   onLogout,
@@ -38,9 +40,8 @@ export function HeaderMenu({
     };
   }, [open]);
 
-  // Samples are read-only — wipe is a 403 there. Switch-corpus moved to the
-  // clickable corpus tag in the header (App.tsx).
-  const showWipe = !isSample;
+  // Switch-corpus moved to the clickable corpus tag in the header (App.tsx).
+  const showWipe = canDelete;
   const showLogout = !!userEmail;
   if (!showWipe && !showLogout) return null;
 
@@ -69,7 +70,7 @@ export function HeaderMenu({
               {userEmail}
             </div>
           )}
-          {onEditChapters && !isSample && (
+          {onEditChapters && canEditChapters && (
             <button
               onClick={() => {
                 setOpen(false);

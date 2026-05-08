@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
 from api import config
@@ -26,6 +27,30 @@ from core.telemetry import log as tlog
 router = APIRouter()
 
 _FRONT_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class AccessContext:
+    slug: str
+    mode: str
+    actor_label: str
+    can_read: bool
+    can_write: bool
+    can_compute: bool
+    can_promote: bool
+    can_delete: bool
+    can_rename: bool
+
+    def capabilities(self) -> dict:
+        return {
+            "mode": self.mode,
+            "can_read": self.can_read,
+            "can_write": self.can_write,
+            "can_compute": self.can_compute,
+            "can_promote": self.can_promote,
+            "can_delete": self.can_delete,
+            "can_rename": self.can_rename,
+        }
 
 
 def get_session(x_corpus_session: str | None = Header(None)) -> str:
@@ -68,18 +93,88 @@ def is_sample_corpus(slug: str) -> bool:
     return bool(meta.get("sample"))
 
 
+def _load_corpus_meta(slug: str) -> dict:
+    if not _valid_slug(slug):
+        return {}
+    meta_path = config.CORPORA_ROOT / slug / "_meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def _get_corpus_secret(slug: str) -> str | None:
     """Return the secret key for a corpus if one is configured, else None."""
     if not _valid_slug(slug):
         return None
-    meta_path = config.CORPORA_ROOT / slug / "_meta.json"
-    if not meta_path.exists():
-        return None
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    meta = _load_corpus_meta(slug)
     return meta.get("secret") or None
+
+
+def _owner_access(slug: str, email: str) -> AccessContext:
+    return AccessContext(
+        slug=slug,
+        mode="owner",
+        actor_label=email,
+        can_read=True,
+        can_write=True,
+        can_compute=True,
+        can_promote=True,
+        can_delete=True,
+        can_rename=True,
+    )
+
+
+def _read_only_access(slug: str, mode: str) -> AccessContext:
+    return AccessContext(
+        slug=slug,
+        mode=mode,
+        actor_label=f"({mode})",
+        can_read=True,
+        can_write=False,
+        can_compute=True,
+        can_promote=False,
+        can_delete=False,
+        can_rename=False,
+    )
+
+
+def resolve_corpus_access(
+    session: str,
+    auth_email: str | None = None,
+    corpus_secret: str | None = None,
+) -> AccessContext:
+    """Resolve the request into a single capability set.
+
+    Owner auth wins; otherwise samples and matching secret corpora are
+    read/compute-only public trial surfaces. Non-owned private corpora remain
+    invisible without the right auth path.
+    """
+    corpus_dir(session)
+    state = _load_auth()
+    if auth_email and session in state["users"].get(auth_email, []):
+        return _owner_access(session, auth_email)
+    if is_sample_corpus(session):
+        return _read_only_access(session, "sample")
+    secret = _get_corpus_secret(session)
+    if secret:
+        if corpus_secret == secret:
+            return _read_only_access(session, "secret")
+        raise HTTPException(404, "not found")
+    if auth_email is None:
+        raise HTTPException(401, "auth required: missing or invalid X-Auth-Token")
+    raise HTTPException(403, "this corpus is not owned by the authenticated user")
+
+
+def require_capability(access: AccessContext, capability: str) -> str:
+    if not getattr(access, capability, False):
+        if capability == "can_write" and access.mode in ("sample", "secret"):
+            raise HTTPException(403, f"{access.mode} corpora are read-only")
+        raise HTTPException(403, f"corpus does not allow {capability}")
+    return access.slug
 
 
 def require_corpus_access(
@@ -87,22 +182,19 @@ def require_corpus_access(
     auth_email: str | None = Depends(get_auth_optional),
     x_corpus_secret: str | None = Header(None),
 ) -> str:
-    """Gate on (sample corpus) OR (secret key) OR (auth token + ownership)."""
-    if not _valid_slug(session):
-        raise HTTPException(401, "invalid session")
-    if is_sample_corpus(session):
-        return session
-    corpus_secret = _get_corpus_secret(session)
-    if corpus_secret:
-        if x_corpus_secret == corpus_secret:
-            return session
-        raise HTTPException(404, "not found")
-    if auth_email is None:
-        raise HTTPException(401, "auth required: missing or invalid X-Auth-Token")
-    state = _load_auth()
-    if session not in state["users"].get(auth_email, []):
-        raise HTTPException(403, "this corpus is not owned by the authenticated user")
-    return session
+    """Require read access to the corpus."""
+    access = resolve_corpus_access(session, auth_email, x_corpus_secret)
+    return require_capability(access, "can_read")
+
+
+def require_access_context(
+    session: str = Depends(get_session),
+    auth_email: str | None = Depends(get_auth_optional),
+    x_corpus_secret: str | None = Header(None),
+) -> AccessContext:
+    access = resolve_corpus_access(session, auth_email, x_corpus_secret)
+    require_capability(access, "can_read")
+    return access
 
 
 def _owner_email_for_token(session: str, auth_token: str | None) -> str | None:
@@ -118,48 +210,35 @@ def _owner_email_for_token(session: str, auth_token: str | None) -> str | None:
     return email
 
 
-def authorize_ws_corpus(
+def resolve_ws_access(
     session: str,
     auth_token: str | None,
     corpus_secret: str | None = None,
-) -> tuple[str, bool]:
+) -> AccessContext:
     """Validate WebSocket start access.
 
-    Returns (email_label, can_write). Public samples and matching
-    secret-backed corpora can start trial compute sessions, but they cannot
-    promote shared/canonical files. Authenticated owners can both compute and
-    persist.
+    Public samples and matching secret-backed corpora can start trial compute
+    sessions, but they cannot promote shared/canonical files. Authenticated
+    owners can both compute and persist.
     """
     corpus_dir(session)
     owner_email = _owner_email_for_token(session, auth_token)
     if owner_email:
-        return owner_email, True
-    if is_sample_corpus(session):
-        return "(sample)", False
-    secret = _get_corpus_secret(session)
-    if secret:
-        if corpus_secret == secret:
-            return "(secret)", False
-        raise HTTPException(404, "not found")
-    if auth_token:
-        raise HTTPException(403, "this corpus is not owned by the authenticated user")
-    raise HTTPException(401, "auth required: missing token in start message")
+        access = _owner_access(session, owner_email)
+    else:
+        access = resolve_corpus_access(session, None, corpus_secret)
+    require_capability(access, "can_compute")
+    return access
 
 
 def require_writable(
     session: str = Depends(get_session),
     auth_email: str | None = Depends(get_auth_optional),
+    x_corpus_secret: str | None = Header(None),
 ) -> str:
     """Gate destructive / compute-spending operations to corpus owners."""
-    corpus_dir(session)
-    if is_sample_corpus(session):
-        raise HTTPException(403, "sample corpora are read-only")
-    if auth_email is None:
-        raise HTTPException(401, "write access requires owner auth")
-    state = _load_auth()
-    if session not in state["users"].get(auth_email, []):
-        raise HTTPException(403, "this corpus is not owned by the authenticated user")
-    return session
+    access = resolve_corpus_access(session, auth_email, x_corpus_secret)
+    return require_capability(access, "can_write")
 
 
 def corpus_dir(session: str) -> Path:
@@ -392,9 +471,10 @@ def list_samples(request: Request, x_corpus_secret: str | None = Header(None)):
 
 
 @router.get("/corpus")
-def get_corpus(session: str = Depends(require_corpus_access)):
+def get_corpus(access: AccessContext = Depends(require_access_context)):
     """Return current corpus state for the session — used at page load to
     decide whether to show import flow, imported view, or sample view."""
+    session = access.slug
     cdir = corpus_dir(session)
     notes_dir = cdir / "notes"
     note_count = (
@@ -422,7 +502,8 @@ def get_corpus(session: str = Depends(require_corpus_access)):
     return {
         "slug": session,
         "title": title,
-        "is_sample": is_sample_corpus(session) or bool(_get_corpus_secret(session)),
+        "is_sample": access.mode in ("sample", "secret"),
+        "access": access.capabilities(),
         "note_count": note_count,
         "has_eras": has_eras,
         "eras": eras,

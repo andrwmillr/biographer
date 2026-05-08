@@ -29,6 +29,7 @@ type EraTabProps = {
   models: readonly string[];
   onModelChange: (m: string) => void;
   onChapterFinalized: () => void;
+  canCompute?: boolean;
 };
 
 export function EraTab({
@@ -40,6 +41,7 @@ export function EraTab({
   models,
   onModelChange,
   onChapterFinalized,
+  canCompute = true,
 }: EraTabProps) {
   if (!eras.length) {
     return (
@@ -60,6 +62,7 @@ export function EraTab({
         model={model}
         models={models}
         onModelChange={onModelChange}
+        canCompute={canCompute}
         onFinalized={onChapterFinalized}
         draftHeaderSlot={<>Preface</>}
       />
@@ -97,6 +100,7 @@ export function EraTab({
       model={model}
       models={models}
       onModelChange={onModelChange}
+      canCompute={canCompute}
       onFinalized={onChapterFinalized}
       draftHeaderSlot={eraLabel}
     />

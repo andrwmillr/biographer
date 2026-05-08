@@ -895,7 +895,8 @@ export default function App() {
               )}
               <div className="flex flex-1 items-center justify-end gap-3 min-w-0">
                 <HeaderMenu
-                  isSample={corpusInfo.is_sample}
+                  canDelete={corpusInfo.access?.can_delete ?? !corpusInfo.is_sample}
+                  canEditChapters={corpusInfo.access?.can_write ?? !corpusInfo.is_sample}
                   userEmail={userEmail}
                   onWipe={async () => {
                     if (
@@ -928,6 +929,7 @@ export default function App() {
               models={MODELS}
               onModelChange={(m) => setModel(m as (typeof MODELS)[number])}
               onChapterFinalized={reloadEras}
+              canCompute={corpusInfo.access?.can_compute ?? true}
             />
           </div>
           <div className={viewMode === "themes" ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
@@ -939,6 +941,7 @@ export default function App() {
               model={model}
               models={MODELS.filter((m) => m !== "opus-4.7")}
               onModelChange={(m) => setModel(m as (typeof MODELS)[number])}
+              canCompute={corpusInfo.access?.can_compute ?? true}
             />
           </div>
           <div className={viewMode === "commonplace" ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
@@ -946,7 +949,7 @@ export default function App() {
               apiBase={API_BASE}
               wsBase={WS_BASE}
               model={model}
-              readOnly={corpusInfo?.slug === "c_poems"}
+              readOnly={!(corpusInfo.access?.can_write ?? false)}
             />
           </div>
           {chapterEditorOpen && (

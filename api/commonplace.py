@@ -22,10 +22,10 @@ from pathlib import Path
 from api.config import COMMONPLACE_PATH, REPO
 from api.corpora import (
     _session_corpus_id,
-    authorize_ws_corpus,
     corpus_dir,
     require_corpus_access,
     require_writable,
+    resolve_ws_access,
 )
 from claude_agent_sdk import ClaudeAgentOptions
 from core import corpus as wb
@@ -1001,12 +1001,13 @@ async def commonplace_session(ws: WebSocket):
         return
 
     try:
-        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+        access = resolve_ws_access(session_slug, auth_token, corpus_secret)
     except HTTPException as e:
         await reject(e.detail)
         return
+    user_email = access.actor_label
     corpus_id = _session_corpus_id(session_slug)
-    persist = can_write
+    persist = access.can_promote
 
     session: Session | None = None
     try:
@@ -1120,7 +1121,7 @@ async def commonplace_session(ws: WebSocket):
                 background_loop=_commonplace_watch,
                 email=user_email,
             )
-            session.can_promote = can_write
+            session.can_promote = access.can_promote
             tlog("session_start", kind="commonplace", email=user_email,
                  corpus=corpus_id, model=model, run_id=run_rel)
             await session.attach(ws)

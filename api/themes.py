@@ -34,9 +34,9 @@ from api.corpora import (
     _load_state,
     _note_source,
     _session_corpus_id,
-    authorize_ws_corpus,
     corpus_dir,
     require_corpus_access,
+    resolve_ws_access,
 )
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
@@ -270,10 +270,11 @@ async def themes_curate(ws: WebSocket):
         await reject(e.detail)
         return
     try:
-        user_email, can_write = authorize_ws_corpus(session_slug, auth_token, corpus_secret)
+        access = resolve_ws_access(session_slug, auth_token, corpus_secret)
     except HTTPException as e:
         await reject(e.detail)
         return
+    user_email = access.actor_label
     corpus_id = _session_corpus_id(session_slug)
 
     session: Session | None = None
@@ -416,7 +417,7 @@ async def themes_curate(ws: WebSocket):
                 background_loop=_themes_watch,
                 email=user_email,
             )
-            session.can_promote = can_write
+            session.can_promote = access.can_promote
             tlog("session_start", kind="themes", email=user_email,
                  corpus=corpus_id, model=model,
                  resumed=bool(resume_run_rel),

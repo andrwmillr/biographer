@@ -6,6 +6,15 @@ export type CorpusInfo = {
   slug: string;
   title: string | null;
   is_sample: boolean;
+  access: {
+    mode: string;
+    can_read: boolean;
+    can_write: boolean;
+    can_compute: boolean;
+    can_promote: boolean;
+    can_delete: boolean;
+    can_rename: boolean;
+  };
   note_count: number;
   has_eras: boolean;
   eras: Array<{ name: string; start: string; end?: string }>;

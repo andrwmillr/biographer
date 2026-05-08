@@ -205,6 +205,15 @@ def test_import_zip_then_eras_then_eras_endpoint(client: TestClient, auth_token:
     info = r.json()
     assert info["slug"] == slug
     assert info["has_eras"] is True
+    assert info["access"] == {
+        "mode": "owner",
+        "can_read": True,
+        "can_write": True,
+        "can_compute": True,
+        "can_promote": True,
+        "can_delete": True,
+        "can_rename": True,
+    }
     assert len(info["eras"]) == 2
 
     # 6. Wipe.
@@ -212,10 +221,9 @@ def test_import_zip_then_eras_then_eras_endpoint(client: TestClient, auth_token:
     assert r.status_code == 200
     assert (_test_corpora_root / slug).exists() is False
 
-    # 7. After wipe, the slug is detached from the user — auth gate fires
-    #    with 403 (not-owned) before we ever try to resolve the dir.
+    # 7. After wipe, the slug no longer resolves to an on-disk corpus.
     r = client.get("/eras", headers={"X-Corpus-Session": slug, **auth})
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_import_eras_requires_session(client: TestClient, auth_token: str):
@@ -578,6 +586,15 @@ def test_sample_corpus_readable_anonymously(client: TestClient):
     info = r.json()
     assert info["slug"] == slug
     assert info["is_sample"] is True
+    assert info["access"] == {
+        "mode": "sample",
+        "can_read": True,
+        "can_write": False,
+        "can_compute": True,
+        "can_promote": False,
+        "can_delete": False,
+        "can_rename": False,
+    }
     assert info["has_eras"] is True
     assert info["note_count"] == 2
 
@@ -662,9 +679,10 @@ def test_sample_corpus_allows_trial_compute_without_promotion_rights():
     slug = "c_8888888888888888"
     _lay_down_sample(slug)
 
-    email, can_write = corpora.authorize_ws_corpus(slug, auth_token=None)
-    assert email == "(sample)"
-    assert can_write is False
+    access = corpora.resolve_ws_access(slug, auth_token=None)
+    assert access.actor_label == "(sample)"
+    assert access.can_compute is True
+    assert access.can_promote is False
 
 
 def test_secret_corpus_is_readable_but_not_writable_without_owner_auth(client: TestClient):
@@ -685,18 +703,26 @@ def test_secret_corpus_is_readable_but_not_writable_without_owner_auth(client: T
     headers = {"X-Corpus-Session": slug, "X-Corpus-Secret": "poems-secret"}
     r = client.get("/corpus", headers=headers)
     assert r.status_code == 200, r.text
+    info = r.json()
+    assert info["is_sample"] is True
+    assert info["access"]["mode"] == "secret"
+    assert info["access"]["can_read"] is True
+    assert info["access"]["can_write"] is False
+    assert info["access"]["can_compute"] is True
+    assert info["access"]["can_promote"] is False
 
     r = client.put("/commonplace/note?rel=1850-06-01.md&body=CHANGED", headers=headers)
-    assert r.status_code == 401, r.text
+    assert r.status_code == 403, r.text
     assert note_path.read_text(encoding="utf-8") == original
 
-    email, can_write = corpora.authorize_ws_corpus(
+    access = corpora.resolve_ws_access(
         slug,
         auth_token=None,
         corpus_secret="poems-secret",
     )
-    assert email == "(secret)"
-    assert can_write is False
+    assert access.actor_label == "(secret)"
+    assert access.can_compute is True
+    assert access.can_promote is False
 
 
 def test_sample_flag_does_not_leak_to_andrew(client: TestClient):
