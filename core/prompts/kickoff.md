@@ -2,6 +2,8 @@ Write one chapter of a personal-archive retrospective.
 
 The era inputs are inlined below between INPUT-START / INPUT-END. Treat that block as the entirety of your authorized source material.
 
+**Non-negotiable hard-content rule for every visible message.** If the notes contain hard mental-health material, keep all visible chat output indirect. Do not use the words "suicide", "suicidal", "self-harm", or related method/crisis specifics in narration, the visible chapter sketch, or any user-facing checkpoint. Do not quote crisis language. Use brief broad phrasing like "a hard stretch", "distress", or "mental-health crisis" only when it matters to the chapter shape. This applies to your very first comment.
+
 1. Write the chapter to __RUN_DIR__/output.md, following the system prompt rules.
 2. Also write __RUN_DIR__/thinking.md with real-time reasoning during drafting.
 3. After final assembly, write __RUN_DIR__/threads.md — the structured per-era digest described in the DIGEST section of the system prompt.
@@ -13,27 +15,57 @@ Start work immediately. Do not ask preamble questions.
 
 **No preamble narration.** Don't announce what you're about to do ("I'll start by reading…", "Let me work through this…"). Skip straight to substantive observations.
 
-**Narration register.** When you narrate to me, write in plain language for a non-technical reader. Don't mention file paths, file names (`output.md`, `thinking.md`, `threads.md`), the words "output directory" / "scratch notes" / "thinking notes" / "digest", or the internal checkpoint labels ("Timeline BLUF", "Block-quote candidates", etc.). Just say what you're about to do in human terms — "I'm going to read through the era and give you a sketch of its shape," not "I'll write thinking.md and produce the Timeline BLUF." The file-writing is plumbing; the user doesn't need to hear about it.
+**Narration register.** When you narrate to me, write in plain language for a non-technical reader. Don't mention file paths, file names (`output.md`, `thinking.md`, `threads.md`), the words "output directory" / "scratch notes" / "thinking notes" / "digest", or the internal checkpoint labels ("Chapter sketch", "Final assembly", etc.). Just say what you're doing in human terms — "I'm reading through the era and looking for the chapter shape," not "I'll write thinking.md and produce the Chapter sketch checkpoint." The file-writing is plumbing; the user doesn't need to hear about it.
+
+**Before the first checkpoint, do not summarize the whole era in prose.** If you narrate while reading, keep it to small observations tied to a note or cluster. Save full-era claims, transitions, relationship labels, job/living situation claims, and arc summaries for the chapter sketch, where they can be cited and kept provisional.
 
 <!-- CHECKPOINTS:START -->
 Stop and ask me at these checkpoints, in order:
 
-1. **Timeline BLUF** — after reading inputs, before themes or quote-hunting. Two parts:
+1. **Chapter sketch** — after reading inputs, checking the corpus themes, checking prior/future continuity context, and casting for quotes, before drafting. Do the chronology, thread, continuity, and quote checks privately in your working notes before this checkpoint. Do not turn the sketch into a locked outline. Before showing the checkpoint, write `plan.json` with this shape:
+   ```
+   {
+     "summary": "short provisional chapter-summary paragraph",
+     "chronology": [
+       {
+         "range": "date range",
+         "phase": "place/life-phase",
+         "notes": ["1-2 concrete beats"],
+         "key_dates": ["YYYY-MM-DD"]
+       }
+     ],
+     "state_of_mind": [
+       {
+         "claim": "provisional read of what the notes make the subject seem like",
+         "evidence": ["2-4 separate dates or note clusters that support the read; do not merge them into one event"],
+         "limit": "counterweight, uncertainty, or where not to overstate"
+       }
+     ],
+     "likely_shape": "plain chronology-aware paragraph describing how the chapter will probably move",
+     "other_paths_not_taken": ["optional alternate emphasis and why it should stay secondary"],
+     "quote_candidates": [
+       {
+         "date": "YYYY-MM-DD",
+         "title": "note title",
+         "excerpt": "short verbatim excerpt or locator",
+         "carries": "what this quote could show"
+       }
+     ],
+     "continuity": "one sentence naming how this chapter extends, contrasts with, or quietly calibrates against prior/future context",
+     "texture_only": ["up to 3 motifs noticed but not made load-bearing"]
+   }
+   ```
+   The JSON is for the app; do not mention it to the user. Then show the checkpoint. Lead with one short **Summary** paragraph: the era's basic movement, 2-3 carrying threads, how it relates to surrounding chapters if that matters, and where it seems to land. Then show:
+   - **Chronology map** — 4-6 compact beats with dates and concrete named material.
+   - **State of mind** — 3 provisional pattern reads about what the notes make the subject seem like in this era. Each claim may synthesize multiple notes, but the evidence must stay separated by note/date. Do not merge details into one event, scene, causal chain, or agency claim. Include a limit or counterweight. Use "the notes make him seem..." / "the writing reads as..." rather than diagnostic certainty.
+   - **Likely shape** — one plain, chronology-aware paragraph describing the chapter's probable organization. Do not make it clever. Prefer concrete life/writing material over thematic binaries.
+   - **Other paths not taken** — optional, 1-2 short bullets naming alternate emphases you considered and why they should stay secondary.
+   - **Quote candidates** — 8-12 short excerpts or locators, grouped loosely if useful. Cast wider than the obvious anchors; include a few weird or lower-certainty candidates when they might change the chapter's feel.
+   - **Texture only** — optionally, up to 3 motifs you noticed but do not plan to make load-bearing.
 
-   *Chronology breakdown.* Split the era into 3-8 chronological segments — by location change, life-phase shift, project arc, or natural break. For each segment:
-   - **Date range – place/phase** (note duration if short, e.g. "~2 weeks")
-   - 1-2 sentences of concrete content: named people, named projects, mood, key beats. Use actual names from the notes, not abstractions. **Cite [YYYY-MM-DD] inline for every named item** so I can trace each beat back to a source note.
-   - For longer segments, sketch the internal arc with "→" connectors (e.g. "tutoring → application blitz → crush surfacing → lonely December").
+   Do not print a finalized section outline. Do not present paragraph-by-paragraph detail. Goal: an exploratory map I can approve or redirect before prose begins. End the checkpoint by asking: "Reply \"approve\" to draft from this sketch, or tell me what to change." Do not draft until I reply with "approve". After I approve, continue in this same session and draft the chapter using the approved sketch, your thinking notes, and the era input you already read.
 
-   *Writing gravity.* A line or two on note distribution: where the sustained writing clusters, which stretches are fragmentary, where the chapter's weight will sit.
-
-   Goal: a chronology I could plot on a wall — concrete enough that we can both see the chapter's shape before you commit to threads.
-
-2. **Themes** — after BLUF, before quote-hunting. If CORPUS THEMES are provided in the input, start from those: which are active in this era, how they manifest here (with citations), and any era-specific threads the corpus themes don't cover. The load-bearing relationships; anything content-derived that BLUF didn't surface (BLUF is the calendar; this is what the era is *about*). **Cite [YYYY-MM-DD] for every named instance you list under a thread** — per-item grounding, the same standard the chapter draft uses, so I can trace each example to a source note. Flag only the genuinely ambiguous people-labeling cases (relationship unclear, pseudonym, recurring referent that needs a name) — apply the confident ones silently, don't enumerate naming conventions you're sure of. Expect pushback on which threads earn screen time. **No structural proposals at this checkpoint** — no subheaders, opening/closing beats, section ordering, length targets, or "open on X / land on Y" framing. Structure emerges from the draft itself and gets discussed at final assembly. If you catch yourself reaching for it, stop — that's contamination from the old combined checkpoint.
-
-3. **Block-quote candidates** — after themes, before drafting. Cast wide. Surface ~10+ candidates rather than a curated shortlist. For each: source date, the passage (or a short excerpt + locator if it's long), and one line on what it carries — which theme it lands on, what beat, what register. Group by theme or anticipated section if that helps. Flag a few you'd lean on, but the selection is mine to make by sifting.
-
-4. **Final assembly** — after drafting the full chapter straight through, before declaring done. Anything you cut, paraphrased, or were uncertain about.
+2. **Final assembly** — after drafting and revising the full chapter, before declaring done. Anything you cut, paraphrased, or were uncertain about.
 
 After final assembly, expect post-write iteration — register/quote swaps, factual catches, paragraph rewrites, section rewrites.
 

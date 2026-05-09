@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from api import auth  # noqa: E402
 from api import config  # noqa: E402
 from api import corpora  # noqa: E402
+from api import drafts  # noqa: E402
 from api import server  # noqa: E402
 from core import corpus as wb  # noqa: E402
 
@@ -671,6 +672,427 @@ def test_sample_corpus_blocks_commonplace_mutations(client: TestClient):
         assert r.status_code == 403, r.text
         assert "sample" in r.json()["detail"].lower()
     assert note_path.read_text(encoding="utf-8") == original
+
+
+def test_commonplace_dismissed_is_separate_from_seen_and_excluded_from_drafts(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({
+        "2018-01-01.md": "DISMISSED_SENTINEL " * 20,
+        "2018-02-01.md": "SAVED_SENTINEL " * 20,
+        "2018-03-01.md": "NEUTRAL_SENTINEL " * 20,
+    })
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", b"- name: Era One\n  start: 2018-01\n", "text/yaml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    # Explicit dismiss is a hard chapter-drafting exclusion.
+    r = client.post("/commonplace/dismiss?rel=2018-01-01.md", headers=headers)
+    assert r.status_code == 200, r.text
+
+    # Saved/staged notes are positive drafting signal, not dismissed.
+    r = client.post(
+        "/commonplace/stage?rel=2018-02-01.md&date=2018-02-01&era=Era%20One&title=Saved&body=SAVED_SENTINEL",
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    prep = drafts._prepare_run("Era One", corpus_id=slug)
+    msg = prep["full_user_msg"]
+    assert "DISMISSED_SENTINEL" not in msg
+    assert "SAVED SOURCE NOTES AND PASSAGES" in msg
+    assert "SAVED_SENTINEL" in msg
+    assert "NEUTRAL_SENTINEL" in msg
+
+
+def test_staging_a_dismissed_note_removes_hard_dismissal(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({"2018-01-01.md": "RESTORED_SENTINEL " * 20})
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", b"- name: Era One\n  start: 2018-01\n", "text/yaml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post("/commonplace/dismiss?rel=2018-01-01.md", headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.get("/commonplace/browse/dismissed", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 1
+
+    r = client.post(
+        "/commonplace/stage?rel=2018-01-01.md&date=2018-01-01&era=Era%20One&title=Restored&body=RESTORED_SENTINEL",
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    r = client.get("/commonplace/browse/dismissed", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 0
+
+    prep = drafts._prepare_run("Era One", corpus_id=slug)
+    assert "RESTORED_SENTINEL" in prep["full_user_msg"]
+
+
+def test_dismissed_review_uses_explicit_dismissed_set_and_around(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    files = {
+        f"2018-01-{i:02d}.md": (
+            "SHORT_TARGET" if i == 25 else f"DISMISS_PAGE_{i} " * 20
+        )
+        for i in range(1, 26)
+    }
+    zip_bytes = _build_zip(files)
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+
+    for i in range(1, 26):
+        r = client.post(f"/commonplace/dismiss?rel=2018-01-{i:02d}.md", headers=headers)
+        assert r.status_code == 200, r.text
+
+    r = client.get(
+        "/commonplace/browse/dismissed?limit=20&around=2018-01-25.md",
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] == 25
+    assert data["offset"] == 20
+    assert any(n["rel"] == "2018-01-25.md" for n in data["notes"])
+
+
+def test_commonplace_browse_ignores_generic_seen_but_excludes_saved_and_dismissed(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({
+        "2018-01-01.md": "GENERIC_SEEN_SENTINEL " * 20,
+        "2018-01-02.md": "DISMISSED_SENTINEL " * 20,
+        "2018-01-03.md": "STAGED_SENTINEL " * 20,
+        "2018-01-04.md": "SHORT_READ_SENTINEL",
+    })
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+
+    seen_path = _test_corpora_root / slug / "claude" / "commonplace" / "seen.json"
+    seen_path.parent.mkdir(parents=True, exist_ok=True)
+    seen_path.write_text(json.dumps(["2018-01-01.md"]), encoding="utf-8")
+    r = client.post("/commonplace/dismiss?rel=2018-01-02.md", headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.post(
+        "/commonplace/stage?rel=2018-01-03.md&date=2018-01-03&era=Era%20One&title=Saved&body=STAGED_SENTINEL",
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.get("/commonplace/browse/index", headers=headers)
+    assert r.status_code == 200, r.text
+    rels = {n["rel"] for n in r.json()["notes"]}
+    assert "2018-01-01.md" in rels
+    assert "2018-01-02.md" not in rels
+    assert "2018-01-03.md" not in rels
+    assert "2018-01-04.md" in rels
+
+    r = client.get("/commonplace/browse", headers=headers)
+    assert r.status_code == 200, r.text
+    rels = {n["rel"] for n in r.json()["notes"]}
+    assert rels == {"2018-01-01.md", "2018-01-04.md"}
+    bodies = "\n".join(n["body"] for n in r.json()["notes"])
+    assert "GENERIC_SEEN_SENTINEL" in bodies
+    assert "SHORT_READ_SENTINEL" in bodies
+
+
+def test_commonplace_note_edit_accepts_json_body_and_updates_staging(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({"2018-01-01.md": "ORIGINAL_SENTINEL " * 20})
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", b"- name: Era One\n  start: 2018-01\n", "text/yaml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post(
+        "/commonplace/stage?rel=2018-01-01.md&date=2018-01-01&era=Era%20One&title=EditMe&body=ORIGINAL_SENTINEL",
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    edited = "EDITED_SENTINEL\n\n" + ("long edited body " * 600)
+    r = client.put(
+        "/commonplace/note?rel=2018-01-01.md",
+        json={"body": edited},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    note_path = _test_corpora_root / slug / "notes" / "2018-01-01.md"
+    text = note_path.read_text(encoding="utf-8")
+    assert "EDITED_SENTINEL" in text
+    assert "ORIGINAL_SENTINEL" not in text
+
+    r = client.get("/commonplace/staging", headers=headers)
+    assert r.status_code == 200, r.text
+    staged = r.json()["notes"]
+    assert staged[0]["body"] == edited.strip()
+
+
+def test_commonplace_note_edit_rejects_empty_body(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    original = "EMPTY_GUARD_SENTINEL " * 20
+    zip_bytes = _build_zip({"2018-02-02.md": original})
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+
+    r = client.put(
+        "/commonplace/note?rel=2018-02-02.md",
+        json={"body": ""},
+        headers=headers,
+    )
+    assert r.status_code == 400, r.text
+
+    note_path = _test_corpora_root / slug / "notes" / "2018-02-02.md"
+    assert "EMPTY_GUARD_SENTINEL" in note_path.read_text(encoding="utf-8")
+
+
+def test_reshuffle_preserves_explicit_dismissals(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({
+        "2018-01-01.md": "RESHUFFLE_DISMISSED " * 20,
+        "2018-02-01.md": "RESHUFFLE_NEUTRAL " * 20,
+    })
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", b"- name: Era One\n  start: 2018-01\n", "text/yaml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.post("/commonplace/dismiss?rel=2018-01-01.md", headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.post("/commonplace/reshuffle", headers=headers)
+    assert r.status_code == 200, r.text
+
+    r = client.get("/commonplace/browse/dismissed", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 1
+
+    r = client.get("/commonplace/browse/index", headers=headers)
+    assert r.status_code == 200, r.text
+    rels = {n["rel"] for n in r.json()["notes"]}
+    assert "2018-01-01.md" not in rels
+    assert "2018-02-01.md" in rels
+
+    r = client.get("/commonplace/browse", headers=headers)
+    assert r.status_code == 200, r.text
+    rels = {n["rel"] for n in r.json()["notes"]}
+    assert "2018-01-01.md" not in rels
+    assert "2018-02-01.md" in rels
+
+    r = client.post("/commonplace/undismiss?rel=2018-01-01.md", headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.get("/commonplace/browse/index", headers=headers)
+    assert r.status_code == 200, r.text
+    rels = {n["rel"] for n in r.json()["notes"]}
+    assert "2018-01-01.md" in rels
+
+    r = client.post("/commonplace/dismiss?rel=2018-01-01.md", headers=headers)
+    assert r.status_code == 200, r.text
+
+    prep = drafts._prepare_run("Era One", corpus_id=slug)
+    msg = prep["full_user_msg"]
+    assert "RESHUFFLE_DISMISSED" not in msg
+    assert "RESHUFFLE_NEUTRAL" in msg
+
+
+def test_prepare_run_keeps_single_session_inputs(
+    client: TestClient,
+    auth_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(drafts, "REPO", _test_corpora_root)
+    zip_bytes = _build_zip({
+        f"2018-01-{idx:02d}.md": ("chunk note " + str(idx) + "\n") * 900
+        for idx in range(1, 9)
+    })
+    auth = {"X-Auth-Token": auth_token}
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **auth}
+    r = client.post(
+        "/import/eras",
+        files={"file": ("eras.yaml", b"- name: Era One\n  start: 2018-01\n", "text/yaml")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    prep = drafts._prepare_run("Era One", corpus_id=slug)
+    run_dir = prep["run_dir"]
+    assert (run_dir / "user.md").is_file()
+    assert not (run_dir / "user_parts.md").exists()
+    assert not (run_dir / "user_parts").exists()
+
+
+def test_initial_kickoff_frontloads_hard_content_chat_rule():
+    run_dir = _test_corpora_root / "run_for_kickoff"
+    run_dir.mkdir(exist_ok=True)
+    kickoff = drafts._build_kickoff(run_dir, "ERA INPUT", "c_missing")
+    hard_rule_at = kickoff.index("Non-negotiable hard-content rule")
+    start_at = kickoff.index("Start work immediately")
+    input_at = kickoff.index("--- INPUT-START ---")
+    assert hard_rule_at < start_at
+    assert hard_rule_at < input_at
+    assert "This applies to your very first comment." in kickoff
+    assert "No archive plumbing in visible output" not in kickoff
+    assert "- **Must not claim**" not in kickoff
+    assert "Chapter sketch" in kickoff
+    assert "state_of_mind" in kickoff
+    assert "State of mind" in kickoff
+    assert "likely_shape" in kickoff
+    assert "Possible spines" not in kickoff
+    assert "quote_candidates" in kickoff
+    assert "\"sections\"" not in kickoff
+
+
+def test_chapter_prompt_does_not_explain_letters_by_folder():
+    assert "letter/` folder" not in wb.CHAPTER_SYSTEM
+    assert "the note does not show it was sent" in wb.CHAPTER_SYSTEM
+    assert "Never mention folders, paths, labels" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_keeps_continuity_optional():
+    assert "Sketch and continuity" in wb.CHAPTER_SYSTEM
+    assert "prior chapters can support light callbacks or contrasts" in wb.CHAPTER_SYSTEM
+    assert "future context is calibration, not foreshadowing" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_keeps_sketch_as_guide_not_thesis():
+    assert "Use the approved sketch as a guide, not a thesis to prove" in wb.CHAPTER_SYSTEM
+    assert "Let source material change emphasis as you draft" in wb.CHAPTER_SYSTEM
+    assert "don't mechanically prove every sketch claim" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_requires_state_of_mind_synthesis():
+    assert "State-of-mind synthesis" in wb.CHAPTER_SYSTEM
+    assert "what the notes make the subject seem like" in wb.CHAPTER_SYSTEM
+    assert "Keep claims abstract; keep evidence items separated by note/date" in wb.CHAPTER_SYSTEM
+    assert "Do not turn synthesis into event narration" in wb.CHAPTER_SYSTEM
+    assert "state-of-mind prose for blended facts" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_prefers_modular_prose_over_seamless_narrative():
+    assert "Modular prose, not seamless narrative" in wb.CHAPTER_SYSTEM
+    assert "Each paragraph should usually carry one note, one note-cluster, or one abstract synthesis" in wb.CHAPTER_SYSTEM
+    assert "don't invent bridges" in wb.CHAPTER_SYSTEM
+    assert "not a seamless life narrative" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_requires_revision_and_chronology_artifacts():
+    assert "chronology check with every key date" in wb.CHAPTER_SYSTEM
+    assert "one-line content note for each date" in wb.CHAPTER_SYSTEM
+    assert "## Revision pass — done" in wb.CHAPTER_SYSTEM
+    assert "at least 3 concrete edits" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_treats_poems_as_figurative_evidence():
+    assert "Poems are figurative evidence" in wb.CHAPTER_SYSTEM
+    assert "not diary entries with line breaks" in wb.CHAPTER_SYSTEM
+    assert "movement, image-field, address, rhythm, or form" in wb.CHAPTER_SYSTEM
+
+
+def test_chapter_prompt_quotes_verbatim_inline_links():
+    assert "If the linked words are verbatim source language" in wb.CHAPTER_SYSTEM
+    assert "[\"quoted words\"](YYYY-MM-DD)" in wb.CHAPTER_SYSTEM
 
 
 def test_sample_corpus_allows_trial_compute_without_promotion_rights():

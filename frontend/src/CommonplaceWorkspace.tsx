@@ -175,6 +175,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   const [dismissedOffset, setDismissedOffset] = useState(0);
   const [dismissedTotal, setDismissedTotal] = useState(0);
   const [dismissedSpread, setDismissedSpread] = useState(0);
+  const [lastDismissedRel, setLastDismissedRel] = useState<string | null>(null);
 
   // Discover tab — random dealt cards.
   const [dealt, setDealt] = useState<DealtNote[]>([]);
@@ -191,21 +192,40 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   const [overlayIndex, setOverlayIndex] = useState<number | null>(null);
 
   const [highlightDate, setHighlightDate] = useState<string | undefined>();
+  const [selectedTimelineRel, setSelectedTimelineRel] = useState<string | undefined>();
+  const [pendingReadTarget, setPendingReadTarget] = useState<{ date: string; rel?: string } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
-  // Prefetch cache: keyed by offset.
-  const browseCache = useRef<Map<number, { notes: any[]; total: number }>>(new Map());
-
   const BROWSE_PAGE = 20;
+
+  function refreshBrowseIndex() {
+    fetch(`${apiBase}/commonplace/browse/index`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.notes) setBrowseIndex(d.notes); })
+      .catch(() => {});
+  }
+
+  function refreshCurrentBrowsePage(startSpread: number = readSpread) {
+    fetchBrowsePage(browseOffset, startSpread);
+  }
+
+  function removeFromBrowseState(rel: string, refill: boolean = true) {
+    const inIndex = browseIndex.some((n) => n.rel === rel);
+    setBrowseIndex((prev) => prev.filter((n) => n.rel !== rel));
+    setBrowseNotes((prev) => prev.filter((n) => n.rel !== rel));
+    setSelectedTimelineRel((prev) => prev === rel ? undefined : prev);
+    if (inIndex) setBrowseTotal((prev) => Math.max(0, prev - 1));
+    if (refill) {
+      refreshBrowseIndex();
+      refreshCurrentBrowsePage();
+    }
+  }
 
   // ---- Load initial data ----
   useEffect(() => {
     // Read-only corpora still need browse data; readOnly only disables
     // mutation actions such as save, dismiss, edit, and AI curation.
-    fetch(`${apiBase}/commonplace/browse/index`, { headers: authHeaders() })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.notes) setBrowseIndex(d.notes); })
-      .catch(() => {});
+    refreshBrowseIndex();
     if (!readOnly) {
       fetch(`${apiBase}/commonplace/staging`, { headers: authHeaders() })
         .then((r) => (r.ok ? r.json() : null))
@@ -220,37 +240,18 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   }, [apiBase, readOnly]);
 
   // ---- Browse: fetch a page of chronological notes ----
-  function prefetchBrowse(offset: number) {
-    if (offset < 0 || browseCache.current.has(offset)) return;
-    const params = new URLSearchParams({
-      offset: String(offset),
-      limit: String(BROWSE_PAGE),
-    });
-    fetch(`${apiBase}/commonplace/browse?${params}`, { headers: authHeaders() })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d) browseCache.current.set(offset, { notes: d.notes || [], total: d.total ?? 0 });
-      })
-      .catch(() => {});
-  }
-
   function applyBrowsePage(offset: number, notes: any[], total: number, startSpread: number) {
+    if (offset > 0 && total > 0 && notes.length === 0) {
+      fetchBrowsePage(Math.floor((total - 1) / BROWSE_PAGE) * BROWSE_PAGE, startSpread);
+      return;
+    }
     setBrowseNotes(notes);
     setBrowseOffset(offset);
     setBrowseTotal(total);
     setReadSpread(startSpread);
-    // Prefetch neighbors.
-    prefetchBrowse(offset + BROWSE_PAGE);
-    if (offset > 0) prefetchBrowse(offset - BROWSE_PAGE);
   }
 
   function fetchBrowsePage(offset: number, startSpread: number = 0) {
-    // Use cache if available.
-    const cached = browseCache.current.get(offset);
-    if (cached) {
-      applyBrowsePage(offset, cached.notes, cached.total, startSpread);
-      return;
-    }
     const params = new URLSearchParams({
       offset: String(offset),
       limit: String(BROWSE_PAGE),
@@ -259,18 +260,18 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d) {
-          browseCache.current.set(offset, { notes: d.notes || [], total: d.total ?? 0 });
-          applyBrowsePage(offset, d.notes || [], d.total ?? 0, startSpread);
+          applyBrowsePage(d.offset ?? offset, d.notes || [], d.total ?? 0, startSpread);
         }
       })
       .catch(() => {});
   }
 
-  function fetchDismissedPage(offset: number, startSpread: number = 0) {
+  function fetchDismissedPage(offset: number, startSpread: number = 0, aroundRel?: string | null) {
     const params = new URLSearchParams({
       offset: String(offset),
       limit: String(BROWSE_PAGE),
     });
+    if (aroundRel) params.set("around", aroundRel);
     fetch(`${apiBase}/commonplace/browse/dismissed?${params}`, { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -325,6 +326,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   function stageNote(note: DealtNote, highlight: string) {
     if (readOnly) return;
     const isFullNote = highlight === note.body;
+    const wasDismissed = dismissedNotes.some((n) => n.rel === note.rel);
     const params = new URLSearchParams({
       rel: note.rel, date: note.date, era: note.era,
       title: note.title, body: note.body,
@@ -355,9 +357,11 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
             }];
           });
           // Mark as staged in browse view too.
-          setBrowseNotes((prev) =>
-            prev.map((n) => n.rel === note.rel ? { ...n, staged: true } : n),
-          );
+          removeFromBrowseState(note.rel);
+          if (wasDismissed) {
+            setDismissedNotes((prev) => prev.filter((n) => n.rel !== note.rel));
+            setDismissedTotal((prev) => Math.max(0, prev - 1));
+          }
           // Remove from dealt cards and advance overlay if open.
           setDealt((prev) => {
             const next = prev.filter((d) => d.rel !== note.rel);
@@ -379,19 +383,34 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
     if (readOnly) return;
     fetch(`${apiBase}/commonplace/dismiss?${new URLSearchParams({ rel })}`, {
       method: "POST", headers: authHeaders(),
-    }).catch(() => {});
-    setBrowseNotes((prev) => prev.filter((n) => n.rel !== rel));
-    setDealt((prev) => prev.filter((d) => d.rel !== rel));
-    setDismissedTotal((prev) => prev + 1);
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d?.ok) return;
+        removeFromBrowseState(rel);
+        setDealt((prev) => prev.filter((note) => note.rel !== rel));
+        setDismissedTotal((prev) => typeof d.total === "number" ? d.total : prev + 1);
+        setLastDismissedRel(rel);
+        if (showDismissed) fetchDismissedPage(0, 0, rel);
+      })
+      .catch(() => {});
   }
 
   function undismissNote(rel: string) {
     if (readOnly) return;
     fetch(`${apiBase}/commonplace/undismiss?${new URLSearchParams({ rel })}`, {
       method: "POST", headers: authHeaders(),
-    }).catch(() => {});
+    })
+      .then((r) => {
+        if (r.ok) {
+          refreshBrowseIndex();
+          refreshCurrentBrowsePage();
+        }
+      })
+      .catch(() => {});
     setDismissedNotes((prev) => prev.filter((n) => n.rel !== rel));
     setDismissedTotal((prev) => Math.max(0, prev - 1));
+    setLastDismissedRel((prev) => prev === rel ? null : prev);
   }
 
   function unstageNote(s: StagedNote) {
@@ -402,28 +421,71 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
       headers: authHeaders(),
     })
       .then((r) => {
-        if (r.ok) setStaged((prev) => prev.filter((x) => x.rel !== s.rel));
+        if (r.ok) {
+          setStaged((prev) => prev.filter((x) => x.rel !== s.rel));
+          refreshBrowseIndex();
+          refreshCurrentBrowsePage();
+        }
       })
       .catch(() => {});
   }
 
   function editNote(rel: string, body: string) {
     if (readOnly) return;
-    const params = new URLSearchParams({ rel, body });
+    const params = new URLSearchParams({ rel });
     fetch(`${apiBase}/commonplace/note?${params}`, {
-      method: "PUT", headers: authHeaders(),
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
     })
       .then((r) => {
         if (r.ok) {
           setStaged((prev) => prev.map((s) => s.rel === rel ? { ...s, body } : s));
           setBrowseNotes((prev) => prev.map((n) => n.rel === rel ? { ...n, body } : n));
+          setDismissedNotes((prev) => prev.map((n) => n.rel === rel ? { ...n, body } : n));
           setDealt((prev) => prev.map((d) => d.rel === rel ? { ...d, body } : d));
         }
       })
       .catch(() => {});
   }
 
-  function scrollToCard(date: string) {
+  function findBookNote(
+    flow: HTMLElement,
+    target: { date: string; rel?: string },
+  ): HTMLElement | null {
+    const notes = Array.from(flow.querySelectorAll<HTMLElement>("[data-note-rel]"));
+    if (target.rel) {
+      const byRel = notes.find((el) => el.dataset.noteRel === target.rel);
+      if (byRel) return byRel;
+    }
+    return notes.find((el) => el.dataset.noteDate === target.date) ?? null;
+  }
+
+  function setBookSpreadForTarget(
+    target: { date: string; rel?: string },
+    setSpread: (spread: number) => void,
+  ): boolean {
+    const flow = gridRef.current?.querySelector("[data-book-flow]") as HTMLElement | null;
+    if (!flow) return false;
+    const noteEl = findBookNote(flow, target);
+    if (!noteEl || flow.clientWidth <= 0) return false;
+    setSpread(Math.floor(noteEl.offsetLeft / flow.clientWidth));
+    return true;
+  }
+
+  useEffect(() => {
+    if (!pendingReadTarget || view !== "read" || showDismissed) return;
+    const id = requestAnimationFrame(() => {
+      if (setBookSpreadForTarget(pendingReadTarget, setReadSpread)) {
+        setPendingReadTarget(null);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [pendingReadTarget, browseNotes, browseOffset, view, showDismissed]);
+
+  function scrollToCard(date: string, rel?: string) {
+    const target = { date, rel };
+    if (rel) setSelectedTimelineRel(rel);
     setHighlightDate(date);
     setTimeout(() => setHighlightDate(undefined), 2000);
     if (view === "discover") {
@@ -432,29 +494,22 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
       ) as HTMLElement | null;
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     } else if (view === "read") {
+      if (showDismissed) {
+        setBookSpreadForTarget(target, setDismissedSpread);
+        return;
+      }
       // Find the note's position in the full index and load the right page.
-      const idx = browseIndex.findIndex((n) => n.date === date);
+      const idx = browseIndex.findIndex((n) => rel ? n.rel === rel : n.date === date);
       if (idx < 0) return;
       const targetOffset = Math.floor(idx / BROWSE_PAGE) * BROWSE_PAGE;
       if (targetOffset !== browseOffset) {
+        setPendingReadTarget(target);
         fetchBrowsePage(targetOffset);
-        // Spread will reset to 0 when page loads — good enough.
       } else {
-        // Already on the right page — scroll the book.
-        const flow = gridRef.current?.querySelector("[data-book-flow]") as HTMLElement | null;
-        if (!flow) return;
-        const noteEl = flow.querySelector(`[data-note-date="${date}"]`) as HTMLElement | null;
-        if (!noteEl) return;
-        const spreadIdx = Math.floor(noteEl.offsetLeft / flow.clientWidth);
-        setReadSpread(spreadIdx);
+        setBookSpreadForTarget(target, setReadSpread);
       }
     } else if (view === "highlight") {
-      const flow = gridRef.current?.querySelector("[data-book-flow]") as HTMLElement | null;
-      if (!flow) return;
-      const noteEl = flow.querySelector(`[data-note-date="${date}"]`) as HTMLElement | null;
-      if (!noteEl) return;
-      const spreadIdx = Math.floor(noteEl.offsetLeft / flow.clientWidth);
-      setHighlightSpread(spreadIdx);
+      setBookSpreadForTarget(target, setHighlightSpread);
     }
   }
 
@@ -465,18 +520,19 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
   const stagedRels = new Set(staged.map((s) => s.rel));
   const readNotes = browseNotes.filter((n) => !n.staged && !stagedRels.has(n.rel));
 
-  const timelineNotes: Note[] = (
-    view === "read" ? browseIndex
+  const timelineSource: Array<{ rel: string; date: string; title: string; era: string; body?: string }> =
+    view === "read" ? (showDismissed ? dismissedNotes : browseIndex)
     : view === "highlight" ? sortedStaged
-    : dealt
-  )
+    : dealt;
+
+  const timelineNotes: Note[] = timelineSource
     .map((n, i) => ({
-      rel: `${view}/${i}`,
+      rel: n.rel || `${view}/${i}`,
       date: n.date,
       title: isUntitled(n.title) ? "" : n.title,
       label: n.era,
       source: "",
-      body: "",
+      body: n.body ?? "",
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -496,12 +552,16 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
                   key={tab}
                   onClick={() => {
                     setView(tab);
-                    if (tab !== "read") setShowDismissed(false);
+                    setShowDismissed(false);
+                    if (tab === "read") {
+                      refreshBrowseIndex();
+                      refreshCurrentBrowsePage();
+                    }
                     if (tab === "discover" && staged.length >= 5 && !dealing) fetchDeal();
                   }}
                   className={
                     "px-2 py-0.5 rounded transition-colors " +
-                    (view === tab
+                    (view === tab && !(tab === "read" && showDismissed)
                       ? "bg-stone-100 text-stone-700"
                       : "text-stone-400 hover:text-stone-600")
                   }
@@ -513,18 +573,24 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
               ))}
             </div>
 
-            {/* Reshuffle — opens dismissed notes book */}
+            {/* Review dismissed notes book */}
             {dismissedTotal > 0 && (
               <button
                 onClick={() => {
                   const next = !showDismissed;
                   setShowDismissed(next);
-                  if (next) { setView("read"); if (dismissedNotes.length === 0) fetchDismissedPage(0); }
+                  if (next) {
+                    setView("read");
+                    const offset = lastDismissedRel
+                      ? 0
+                      : Math.max(0, Math.floor((dismissedTotal - 1) / BROWSE_PAGE) * BROWSE_PAGE);
+                    fetchDismissedPage(offset, 0, lastDismissedRel);
+                  }
                 }}
                 className={
-                  "ml-auto text-xs font-sans transition-colors shrink-0 whitespace-nowrap " +
+                  "ml-auto px-2 py-0.5 rounded text-[11px] font-sans transition-colors shrink-0 whitespace-nowrap " +
                   (showDismissed
-                    ? "text-stone-700"
+                    ? "bg-stone-100 text-stone-700"
                     : "text-stone-400 hover:text-stone-600")
                 }
               >
@@ -543,7 +609,8 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
               notes={timelineNotes}
               loading={false}
               highlightDate={highlightDate}
-              onSelect={(n) => scrollToCard(n.date)}
+              selectedRel={selectedTimelineRel}
+              onSelect={(n) => scrollToCard(n.date, n.rel)}
               bg="bg-stone-50"
             />
           </div>
@@ -569,12 +636,13 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
                   onNavigate={setDismissedSpread}
                   onHighlight={(rel, text) => {
                     const note = dismissedNotes.find((n) => n.rel === rel);
-                    if (note) { undismissNote(rel); stageNote(note, text); }
+                    if (note) stageNote(note, text);
                   }}
                   onRemove={(rel) => undismissNote(rel)}
+                  removeTitle="Restore to read"
                   onSave={(rel) => {
                     const note = dismissedNotes.find((n) => n.rel === rel);
-                    if (note) { undismissNote(rel); stageNote(note, note.body); }
+                    if (note) stageNote(note, note.body);
                   }}
                   onEditSave={(rel, body) => editNote(rel, body)}
                   onLastPage={
@@ -608,6 +676,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
                   if (note) stageNote(note, text);
                 }}
                 onRemove={(rel) => dismissNote(rel)}
+                removeTitle="Dismiss"
                 onSave={(rel) => {
                   const note = readNotes.find((n) => n.rel === rel);
                   if (note) stageNote(note, note.body);
@@ -645,6 +714,7 @@ export function CommonplaceWorkspace({ apiBase, readOnly }: Props) {
                   const note = staged.find((s) => s.rel === rel);
                   if (note) unstageNote(note);
                 }}
+                removeTitle="Remove from highlights"
                 onEditSave={(rel, body) => editNote(rel, body)}
               />
             )
@@ -782,6 +852,7 @@ function NoteBook({
   onRemove,
   onEditSave,
   onSave,
+  removeTitle,
   onLastPage,
   onFirstPage,
 }: {
@@ -793,6 +864,7 @@ function NoteBook({
   onRemove: (rel: string) => void;
   onEditSave: (rel: string, body: string) => void;
   onSave?: (rel: string) => void;
+  removeTitle?: string;
   onLastPage?: () => void;
   onFirstPage?: () => void;
 }) {
@@ -833,7 +905,11 @@ function NoteBook({
   // Keyboard nav.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.target as HTMLElement)?.tagName === "TEXTAREA") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.closest("textarea,input,[contenteditable='true']")
+      ) return;
       if (e.key === "ArrowLeft") {
         if (spread > 0) onNavigate(spread - 1);
         else if (onFirstPage) onFirstPage();
@@ -882,6 +958,14 @@ function NoteBook({
     onHighlight(selection.rel, selection.text);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
+  }
+
+  function keepCurrentSpreadStill() {
+    const left = flowRef.current?.scrollLeft;
+    if (left === undefined) return;
+    requestAnimationFrame(() => {
+      if (flowRef.current) flowRef.current.scrollLeft = left;
+    });
   }
 
   const spreadsLeft = spread;
@@ -951,6 +1035,10 @@ function NoteBook({
                         <button
                           onClick={() => {
                             if (editingRel === note.rel) {
+                              if (!editDraft.trim() && note.body.trim()) {
+                                setEditDraft(note.body);
+                                return;
+                              }
                               onEditSave(note.rel, editDraft);
                               setEditingRel(null);
                             } else {
@@ -980,7 +1068,7 @@ function NoteBook({
                         <button
                           onClick={() => onRemove(note.rel)}
                           className="text-stone-300 hover:text-stone-500 transition-colors text-sm leading-none"
-                          title={onSave ? "Dismiss" : "Remove"}
+                          title={removeTitle ?? (onSave ? "Dismiss" : "Remove")}
                         >
                           &times;
                         </button>
@@ -1001,6 +1089,11 @@ function NoteBook({
                   }
                   contentEditable={editingRel === note.rel}
                   suppressContentEditableWarning
+                  onKeyDown={(e) => {
+                    if (editingRel !== note.rel) return;
+                    e.stopPropagation();
+                    keepCurrentSpreadStill();
+                  }}
                   onInput={(e) => setEditDraft((e.target as HTMLElement).innerText)}
                 >
                   {("highlights" in note) && note.highlights.length > 0

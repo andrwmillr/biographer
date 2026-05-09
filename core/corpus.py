@@ -550,7 +550,8 @@ def load_future_chapters(era_name, corpus_id=None):
 # ---------------------------------------------------------------------------
 
 def build_user_msg(era_name, notes, prior_chapters=None, prior_digests=None,
-                   future_chapters=None, future_digests=None, corpus_id=None):
+                   future_chapters=None, future_digests=None, corpus_id=None,
+                   char_cap=None):
     sorted_notes = sorted(notes, key=lambda n: n.get("date", ""))
     bodies = []
     for n in sorted_notes:
@@ -559,8 +560,9 @@ def build_user_msg(era_name, notes, prior_chapters=None, prior_digests=None,
             continue
         bodies.append((n, body))
     total = sum(len(b) for _, b in bodies)
-    if total > TOTAL_CHAR_CAP and bodies:
-        ratio = TOTAL_CHAR_CAP / total
+    cap = char_cap or TOTAL_CHAR_CAP
+    if total > cap and bodies:
+        ratio = cap / total
         bodies = [(n, sample_keeper(b, max(MIN_PER_NOTE, int(len(b) * ratio)))) for n, b in bodies]
     lines = []
     prior_chapters = prior_chapters or []

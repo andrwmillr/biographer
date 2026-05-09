@@ -19,7 +19,11 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions
 from api.config import KICKOFF_PATH, PREFACE_PATH, REPO
-from api.commonplace import load_passages_for_era
+from api.commonplace import (
+    load_dismissed_rels,
+    load_passages_for_era,
+    load_saved_sources_for_era,
+)
 from api.corpora import (
     _load_state,
     _session_corpus_id,
@@ -37,6 +41,9 @@ from core.session import Session, all_sessions, create_session, get_session
 from core.telemetry import log as tlog
 
 router = APIRouter()
+
+
+PLANNER_ERA_CHAR_CAP = 240_000
 
 
 @router.get("/session/active")
@@ -70,7 +77,8 @@ def _prepare_run(era_name: str, corpus_id: str, include_future: bool = False) ->
     _, by_era, _ = _load_state(corpus_id)
     if era_name not in by_era:
         raise HTTPException(404, f"unknown era: {era_name}")
-    notes = by_era[era_name]
+    dismissed_rels = load_dismissed_rels(corpus_id)
+    notes = [n for n in by_era[era_name] if n.get("rel") not in dismissed_rels]
     if not notes:
         raise HTTPException(400, f"era has no notes: {era_name}")
     prior = wb.load_prior_chapters(era_name, corpus_id)
@@ -84,7 +92,12 @@ def _prepare_run(era_name: str, corpus_id: str, include_future: bool = False) ->
         future_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{t}" for n, t in future]
         future_d = wb.load_future_thread_digests(era_name, corpus_id)
         future_digest_blocks = [f"## {wb.era_heading(n, by_era[n])}\n\n{d}" for n, d in future_d]
-    era_msg = wb.build_user_msg(era_name, notes, corpus_id=corpus_id)
+    era_msg = wb.build_user_msg(
+        era_name,
+        notes,
+        corpus_id=corpus_id,
+        char_cap=PLANNER_ERA_CHAR_CAP,
+    )
 
     parts = []
     if prior_blocks:
@@ -122,15 +135,24 @@ def _prepare_run(era_name: str, corpus_id: str, include_future: bool = False) ->
         )
         parts.append(themes_text.rstrip("\n") + "\n\n")
         parts.append("--- END CORPUS THEMES ---\n\n")
+    saved_sources_text = load_saved_sources_for_era(era_name, corpus_id)
+    if saved_sources_text:
+        parts.append(
+            "--- SAVED SOURCE NOTES AND PASSAGES (user-saved positive signal — "
+            "read these closely and consider them for quotes or section evidence; "
+            "absence from this block says nothing about unsaved notes) ---\n\n"
+        )
+        parts.append(saved_sources_text.rstrip("\n") + "\n\n")
+        parts.append("--- END SAVED SOURCE NOTES AND PASSAGES ---\n\n")
     passages_text = load_passages_for_era(era_name, corpus_id)
     if passages_text:
         parts.append(
-            "--- HIGHLIGHTED PASSAGES (curated quotes from this era's notes — "
-            "these were singled out as especially vivid or significant; weave "
-            "them in where they serve the narrative) ---\n\n"
+            "--- SAVED PASSAGES (curated quotes from this era's notes — "
+            "these were singled out as especially vivid or significant; "
+            "weave them in where they serve the narrative) ---\n\n"
         )
         parts.append(passages_text.rstrip("\n") + "\n\n")
-        parts.append("--- END HIGHLIGHTED PASSAGES ---\n\n")
+        parts.append("--- END SAVED PASSAGES ---\n\n")
     parts.append(era_msg)
     full_user_msg = "".join(parts)
 
@@ -215,13 +237,14 @@ def _build_kickoff(run_dir_abs: Path, user_msg: str, corpus_id: str) -> str:
 
 
 async def _era_watch(session: Session) -> None:
-    """Background loop: watch output.md / thinking.md / threads.md for
+    """Background loop: watch run artifacts for
     changes during a draft run and emit draft_update events. Era finalize
     is server-side (chapter promote), not file-watch driven."""
     paths = {
         "output": session.run_dir / "output.md",
         "thinking": session.run_dir / "thinking.md",
         "threads": session.run_dir / "threads.md",
+        "plan": session.run_dir / "plan.json",
     }
     mtimes: dict[str, float] = {}
     while True:
@@ -415,6 +438,8 @@ async def session(ws: WebSocket):
 
     sess: Session | None = None
     era = first["era"]
+    model_key = first.get("model")
+    model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
     try:
         # Tier 3 hot resume: client passed a run_id that's still alive.
         resume_run_rel = first.get("run_id") if first.get("resume") else None
@@ -425,9 +450,6 @@ async def session(ws: WebSocket):
                 await sess.attach(ws)
 
         if sess is None:
-            model_key = first.get("model")
-            model = wb.MODELS.get(model_key, wb.MODEL) if model_key else wb.MODEL
-
             # Tier 2.5 cold resume: rebuild kickoff from disk artifacts.
             if resume_run_rel:
                 from core.resume import build_era_resume_kickoff
@@ -486,6 +508,7 @@ async def session(ws: WebSocket):
                 system_prompt=wb.CHAPTER_SYSTEM,
                 permission_mode="acceptEdits",
                 allowed_tools=["Read", "Edit", "Write", "TodoWrite"],
+                effort="medium",
                 settings=str(settings_path),
                 cwd=str(run_dir_abs),
                 include_partial_messages=True,

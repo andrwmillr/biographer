@@ -1,14 +1,14 @@
 """Commonplace book — extract standout passages from the notes corpus.
 
-Each run samples unseen notes (proportional by era, filtered to
-high-signal folders), sends them to the LLM with the extraction prompt,
-and appends new passages to the growing commonplace book. Tracks which
-notes have been seen so subsequent runs draw from a shrinking pool
-until the entire corpus has been processed.
+Each run samples notes (filtered to high-signal folders), sends them to
+the LLM with the extraction prompt, and appends new passages to the
+growing commonplace book. Explicit dismissals and saved notes are
+durable user signals; ordinary sampling does not hide a note from future
+runs.
 
 WS /commonplace-session  — streaming extraction session
 GET /commonplace/latest   — return the accumulated commonplace book
-GET /commonplace/progress — how many notes seen vs total
+GET /commonplace/progress — current sample pool size
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 from core import corpus as wb
 from core.session import Session, create_session, get_session
 from core.telemetry import log as tlog
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
 
@@ -46,12 +46,17 @@ def _commonplace_base(corpus_id: str) -> Path:
     return wb.corpus_root(corpus_id) / "claude" / "commonplace"
 
 
-def _seen_path(corpus_id: str) -> Path:
-    return _commonplace_base(corpus_id) / "seen.json"
+def _dismissed_path(corpus_id: str) -> Path:
+    return _commonplace_base(corpus_id) / "dismissed.json"
 
 
-def _load_seen(corpus_id: str) -> set[str]:
-    p = _seen_path(corpus_id)
+def load_dismissed_rels(corpus_id: str) -> set[str]:
+    """Return rels the user explicitly dismissed from commonplace.
+
+    Dismissed rels are a hard exclusion signal for chapter drafting and
+    curation. Ordinary LLM sampling is not a durable user signal.
+    """
+    p = _dismissed_path(corpus_id)
     if not p.exists():
         return set()
     try:
@@ -60,11 +65,11 @@ def _load_seen(corpus_id: str) -> set[str]:
         return set()
 
 
-def _save_seen(seen: set[str], corpus_id: str) -> None:
-    p = _seen_path(corpus_id)
+def _save_dismissed(rels: set[str], corpus_id: str) -> None:
+    p = _dismissed_path(corpus_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+    tmp.write_text(json.dumps(sorted(rels)), encoding="utf-8")
     tmp.replace(p)
 
 
@@ -158,16 +163,16 @@ def _count_eligible(corpus_id: str) -> int:
 
 
 def _prepare_run(corpus_id: str) -> dict:
-    """Build the commonplace input from unseen notes and create a run dir."""
+    """Build the commonplace input from sampled notes and create a run dir."""
     from core.sampling import build_input
 
-    seen = _load_seen(corpus_id)
+    excluded = load_dismissed_rels(corpus_id) | {s["rel"] for s in _load_staging(corpus_id)}
     user_msg, sampled_rels, ordered_notes = build_input(
         top_n=0,
         corpus_id=corpus_id,
         char_cap=CHAR_CAP,
         label_filter=HIGH_SIGNAL_LABELS,
-        exclude_rels=seen,
+        exclude_rels=excluded,
         shuffle=True,
         return_notes=True,
     )
@@ -194,7 +199,6 @@ def _prepare_run(corpus_id: str) -> dict:
         "full_user_msg": user_msg,
         "in_chars": len(user_msg),
         "sampled_count": len(sampled_rels),
-        "seen_before": len(seen),
         "total_eligible": _count_eligible(corpus_id),
         "notes": notes_for_client,
     }
@@ -238,23 +242,19 @@ def _build_kickoff(run_dir: Path, corpus_sample: str, corpus_id: str,
 
 def _promote_empty(run_dir: Path, corpus_id: str,
                    persist: bool = True) -> None:
-    """Mark sampled notes as seen without adding any passages.
-    Used when triage finds nothing worth extracting."""
-    if not persist:
-        return
-    rels_file = run_dir / "sampled_rels.json"
-    if rels_file.exists():
-        new_rels = set(json.loads(rels_file.read_text(encoding="utf-8")))
-        seen = _load_seen(corpus_id)
-        seen |= new_rels
-        _save_seen(seen, corpus_id)
+    """No-op retained for old callers.
+
+    Sampling no longer writes durable queue state; only explicit user
+    choices such as save/dismiss should alter future eligibility.
+    """
+    return None
 
 
 def _promote(run_dir: Path, corpus_id: str,
              persist: bool = True) -> dict:
     """Append this run's passages to the canonical commonplace book and
-    mark the sampled notes as seen.  When persist=False (sample corpora),
-    return the run's content without writing to disk."""
+    return the run's content.  When persist=False (sample corpora), return
+    the run's content without writing to disk."""
     src = run_dir / "commonplace.md"
     if not src.is_file():
         raise ValueError(f"no commonplace.md in {run_dir}")
@@ -271,13 +271,6 @@ def _promote(run_dir: Path, corpus_id: str,
         combined = existing + new_content
         canonical.write_text(combined, encoding="utf-8")
 
-        # Mark sampled notes as seen.
-        rels_file = run_dir / "sampled_rels.json"
-        if rels_file.exists():
-            new_rels = set(json.loads(rels_file.read_text(encoding="utf-8")))
-            seen = _load_seen(corpus_id)
-            seen |= new_rels
-            _save_seen(seen, corpus_id)
     else:
         combined = new_content
 
@@ -364,6 +357,35 @@ def load_passages_for_era(era_name: str, corpus_id: str) -> str:
         date = m.group(1)
         if wb.era_of(date, eras) == era_name:
             out.append("### " + block.rstrip())
+    return "\n\n".join(out)
+
+
+def load_saved_sources_for_era(era_name: str, corpus_id: str) -> str:
+    """Return staged/saved notes for an era as a drafting signal.
+
+    These are not necessarily polished highlights. A saved full note means
+    the user thought the model should pay close attention to it; absence
+    from this block says nothing about unsaved notes.
+    """
+    entries = _load_staging(corpus_id)
+    if not entries:
+        return ""
+    eras = wb.load_eras(corpus_id)
+    out: list[str] = []
+    for entry in entries:
+        date = (entry.get("date") or "")[:10]
+        entry_era = entry.get("era") or (wb.era_of(date, eras) if date else "")
+        if entry_era != era_name:
+            continue
+        title = entry.get("title") or ""
+        rel = entry.get("rel") or ""
+        body = (entry.get("body") or "").strip()
+        highlights = [h.strip() for h in entry.get("highlights", []) if h.strip()]
+        out.append(f"### [{date}] · {entry_era} · {title}\nrel: {rel}")
+        if highlights:
+            out.append("\nSaved passage(s):\n\n" + "\n· · ·\n".join(highlights))
+        elif body:
+            out.append("\nSaved full note:\n\n" + body)
     return "\n\n".join(out)
 
 
@@ -506,11 +528,15 @@ def get_note(
     return _make_result(date_matches[0])
 
 
-def _eligible_notes(corpus_id: str) -> tuple[list[dict], set[str]]:
-    """Return (eligible_notes, seen_set) for the corpus.
-    Each note dict has rel, date, title, era, body."""
+def _eligible_notes(corpus_id: str) -> list[dict]:
+    """Return candidate notes for deal/curate/commonplace sampling.
+
+    Each note dict has rel, date, title, era, body. Explicitly dismissed
+    and already-saved notes are excluded; ordinary prior sampling is not.
+    """
     import random as _rand
-    seen = _load_seen(corpus_id)
+    dismissed = load_dismissed_rels(corpus_id)
+    staged = {s["rel"] for s in _load_staging(corpus_id)}
     notes = wb.load_corpus_notes(corpus_id)
     wb.apply_date_overrides(notes, corpus_id)
     wb.apply_note_metadata(notes, corpus_id)
@@ -522,7 +548,7 @@ def _eligible_notes(corpus_id: str) -> tuple[list[dict], set[str]]:
             label = n["rel"].split("/", 1)[0]
             if label not in HIGH_SIGNAL_LABELS:
                 continue
-        if n["rel"] in seen:
+        if n["rel"] in dismissed or n["rel"] in staged:
             continue
         body = wb.parse_note_body(n["rel"], corpus_id)
         if len(body) < 80:
@@ -541,7 +567,7 @@ def _eligible_notes(corpus_id: str) -> tuple[list[dict], set[str]]:
             "body": body,
         })
     _rand.shuffle(eligible)
-    return eligible, seen
+    return eligible
 
 
 def _sample_up_to(eligible: list[dict], cap: int) -> list[dict]:
@@ -556,8 +582,7 @@ def _sample_up_to(eligible: list[dict], cap: int) -> list[dict]:
     return sampled
 
 
-def _deal_response(sampled: list[dict], seen: set[str],
-                   corpus_id: str) -> dict:
+def _deal_response(sampled: list[dict], corpus_id: str) -> dict:
     """Build the response dict for deal/curate endpoints."""
     total = _count_eligible(corpus_id)
     return {
@@ -566,16 +591,18 @@ def _deal_response(sampled: list[dict], seen: set[str],
              "era": n["era"], "body": n["body"]}
             for n in sampled
         ],
-        "seen": len(seen),
+        "seen": 0,
         "total": total,
-        "complete": len(seen) >= total,
+        "complete": False,
     }
 
 
 def _browse_eligible(corpus_id: str, *, dismissed_only: bool = False) -> list[dict]:
     """Return eligible notes sorted chronologically (no body).
-    By default skips dismissed notes; with dismissed_only=True returns only dismissed."""
-    seen = _load_seen(corpus_id)
+    By default skips explicit dismissals, but not generic seen queue
+    bookkeeping; with dismissed_only=True returns explicitly dismissed
+    notes."""
+    dismissed = load_dismissed_rels(corpus_id)
     notes = wb.load_corpus_notes(corpus_id)
     wb.apply_date_overrides(notes, corpus_id)
     wb.apply_note_metadata(notes, corpus_id)
@@ -589,13 +616,15 @@ def _browse_eligible(corpus_id: str, *, dismissed_only: bool = False) -> list[di
             label = n["rel"].split("/", 1)[0]
             if label not in HIGH_SIGNAL_LABELS:
                 continue
-        in_seen = n["rel"] in seen
-        if dismissed_only and not in_seen:
+        rel = n["rel"]
+        in_dismissed = rel in dismissed
+        if dismissed_only:
+            if not in_dismissed:
+                continue
+        elif in_dismissed:
             continue
-        if not dismissed_only and in_seen:
-            continue
-        body_len = len(wb.parse_note_body(n["rel"], corpus_id))
-        if body_len < 80:
+        body_len = len(wb.parse_note_body(n["rel"], corpus_id).strip())
+        if body_len == 0:
             continue
         era = ""
         ym = (n.get("date") or "")[:7]
@@ -613,14 +642,51 @@ def _browse_eligible(corpus_id: str, *, dismissed_only: bool = False) -> list[di
     return eligible
 
 
+def _dismissed_browse_notes(corpus_id: str) -> list[dict]:
+    """Return explicitly dismissed notes, sorted chronologically.
+
+    Unlike the normal read queue, this is a review surface: if a rel is in
+    dismissed.json, show it when the source note still exists, even if it no
+    longer passes today's queue filters.
+    """
+    dismissed = load_dismissed_rels(corpus_id)
+    if not dismissed:
+        return []
+    notes = wb.load_corpus_notes(corpus_id)
+    wb.apply_date_overrides(notes, corpus_id)
+    wb.apply_note_metadata(notes, corpus_id)
+    eras = wb.load_eras(corpus_id)
+
+    out = []
+    for n in notes:
+        rel = n["rel"]
+        if rel not in dismissed:
+            continue
+        era = ""
+        ym = (n.get("date") or "")[:7]
+        for name, lo, hi in eras:
+            if (lo or "") <= ym <= (hi or "9999"):
+                era = name
+                break
+        out.append({
+            "rel": rel,
+            "date": (n.get("date") or "")[:10],
+            "title": n.get("title") or "",
+            "era": era,
+        })
+    out.sort(key=lambda n: n["date"])
+    return out
+
+
 @router.get("/commonplace/browse/index")
 def browse_index(session: str = Depends(require_corpus_access)):
     """Return lightweight index of all browsable notes (no bodies)."""
     corpus_id = _session_corpus_id(session)
     staged_rels = {s["rel"] for s in _load_staging(corpus_id)}
-    eligible = _browse_eligible(corpus_id)
-    for n in eligible:
-        n["staged"] = n["rel"] in staged_rels
+    eligible = [
+        n for n in _browse_eligible(corpus_id)
+        if n["rel"] not in staged_rels
+    ]
     return {"notes": eligible, "total": len(eligible)}
 
 
@@ -631,16 +697,18 @@ def browse_notes(
     session: str = Depends(require_corpus_access),
 ):
     """Return high-signal notes in chronological order with pagination.
-    Skips already-dismissed notes. Includes staging status."""
+    Skips saved and explicitly dismissed notes."""
     corpus_id = _session_corpus_id(session)
     staged_rels = {s["rel"] for s in _load_staging(corpus_id)}
-    eligible = _browse_eligible(corpus_id)
+    eligible = [
+        n for n in _browse_eligible(corpus_id)
+        if n["rel"] not in staged_rels
+    ]
 
     # Add bodies only for the requested page.
     page = eligible[offset:offset + limit]
     for n in page:
         n["body"] = wb.parse_note_body(n["rel"], corpus_id)
-        n["staged"] = n["rel"] in staged_rels
 
     return {
         "notes": page,
@@ -653,6 +721,7 @@ def browse_notes(
 def browse_dismissed(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    around: str = Query("", description="Rel path to page around"),
     session: str = Depends(require_corpus_access),
 ):
     """Return dismissed notes in chronological order with pagination.
@@ -660,9 +729,14 @@ def browse_dismissed(
     corpus_id = _session_corpus_id(session)
     staged_rels = {s["rel"] for s in _load_staging(corpus_id)}
     eligible = [
-        n for n in _browse_eligible(corpus_id, dismissed_only=True)
+        n for n in _dismissed_browse_notes(corpus_id)
         if n["rel"] not in staged_rels
     ]
+    if around:
+        for i, n in enumerate(eligible):
+            if n["rel"] == around:
+                offset = (i // limit) * limit
+                break
 
     page = eligible[offset:offset + limit]
     for n in page:
@@ -680,24 +754,24 @@ def undismiss_note(
     rel: str = Query(...),
     session: str = Depends(require_writable),
 ):
-    """Remove a note from the seen/dismissed set."""
+    """Remove a note from the dismissed set and make it eligible again."""
     corpus_id = _session_corpus_id(session)
-    seen = _load_seen(corpus_id)
-    seen.discard(rel)
-    _save_seen(seen, corpus_id)
+    dismissed = load_dismissed_rels(corpus_id)
+    dismissed.discard(rel)
+    _save_dismissed(dismissed, corpus_id)
     return {"ok": True}
 
 
 @router.post("/commonplace/deal")
 def deal_notes(session: str = Depends(require_corpus_access)):
-    """Deal a random batch of unseen notes for manual curation."""
+    """Deal a random batch of notes for manual curation."""
     corpus_id = _session_corpus_id(session)
-    eligible, seen = _eligible_notes(corpus_id)
+    eligible = _eligible_notes(corpus_id)
     if not eligible:
         return {"notes": [], "complete": True}
 
     sampled = _sample_up_to(eligible, CHAR_CAP)
-    return _deal_response(sampled, seen, corpus_id)
+    return _deal_response(sampled, corpus_id)
 
 
 # Budget for curate mode — sample more candidates than we'll return.
@@ -710,7 +784,7 @@ async def curate_notes(session: str = Depends(require_writable)):
     from anthropic import AsyncAnthropic
 
     corpus_id = _session_corpus_id(session)
-    eligible, seen = _eligible_notes(corpus_id)
+    eligible = _eligible_notes(corpus_id)
     if not eligible:
         return {"notes": [], "complete": True}
 
@@ -733,7 +807,7 @@ async def curate_notes(session: str = Depends(require_writable)):
     if not highlights:
         # No taste data yet — fall back to random deal.
         sampled = candidates[:len(_sample_up_to(candidates, CHAR_CAP))]
-        return _deal_response(sampled, seen, corpus_id)
+        return _deal_response(sampled, corpus_id)
 
     # Build the LLM prompt.
     candidate_blocks = []
@@ -788,7 +862,7 @@ async def curate_notes(session: str = Depends(require_writable)):
         # LLM found nothing — return a small random set anyway.
         picked = _sample_up_to(candidates, CHAR_CAP)
 
-    return _deal_response(picked, seen, corpus_id)
+    return _deal_response(picked, corpus_id)
 
 
 @router.delete("/commonplace/passage")
@@ -810,14 +884,15 @@ def dismiss_note(
     rel: str = Query("", description="Note rel path"),
     session: str = Depends(require_writable),
 ):
-    """Mark a single note as seen (dismissed without highlighting)."""
+    """Mark a single note as explicitly dismissed without highlighting."""
     corpus_id = _session_corpus_id(session)
     if not rel:
         raise HTTPException(400, "missing rel")
-    seen = _load_seen(corpus_id)
-    seen.add(rel)
-    _save_seen(seen, corpus_id)
-    return {"ok": True}
+    dismissed = load_dismissed_rels(corpus_id)
+    already_dismissed = rel in dismissed
+    dismissed.add(rel)
+    _save_dismissed(dismissed, corpus_id)
+    return {"ok": True, "total": len(dismissed), "already": already_dismissed}
 
 
 @router.post("/commonplace/passage")
@@ -834,11 +909,10 @@ def add_passage(
     if not body.strip():
         raise HTTPException(400, "empty body")
     _add_passage(date, era, title, body, corpus_id)
-    # Mark the source note as seen.
     if rel:
-        seen = _load_seen(corpus_id)
-        seen.add(rel)
-        _save_seen(seen, corpus_id)
+        dismissed = load_dismissed_rels(corpus_id)
+        dismissed.discard(rel)
+        _save_dismissed(dismissed, corpus_id)
     return {"ok": True}
 
 
@@ -846,24 +920,39 @@ def add_passage(
 def edit_note(
     rel: str = Query("", description="Note rel path"),
     body: str = Query(""),
+    payload: dict | None = Body(default=None),
     session: str = Depends(require_writable),
 ):
     """Update a note's body, preserving its frontmatter."""
     corpus_id = _session_corpus_id(session)
+    if payload and isinstance(payload.get("body"), str):
+        body = payload["body"]
     if not rel:
         raise HTTPException(400, "missing rel")
+    body = body.strip()
+    if not body:
+        raise HTTPException(400, "empty body")
     path = wb._safe_note_path(rel, corpus_id)
     if path is None or not path.is_file():
         raise HTTPException(404, "note not found")
     text = path.read_text(encoding="utf-8", errors="replace")
     m = re.match(r"^(---\n.*?\n---\n)", text, re.DOTALL)
     if m:
-        new_text = m.group(1) + "\n" + body.strip() + "\n"
+        new_text = m.group(1) + "\n" + body + "\n"
     else:
-        new_text = body.strip() + "\n"
+        new_text = body + "\n"
     tmp = path.with_suffix(".tmp")
     tmp.write_text(new_text, encoding="utf-8")
     tmp.replace(path)
+
+    entries = _load_staging(corpus_id)
+    changed = False
+    for entry in entries:
+        if entry.get("rel") == rel:
+            entry["body"] = body
+            changed = True
+    if changed:
+        _save_staging(entries, corpus_id)
     return {"ok": True}
 
 
@@ -910,10 +999,9 @@ def stage_note(
 
     _save_staging(entries, corpus_id)
 
-    # Mark as seen.
-    seen = _load_seen(corpus_id)
-    seen.add(rel)
-    _save_seen(seen, corpus_id)
+    dismissed = load_dismissed_rels(corpus_id)
+    dismissed.discard(rel)
+    _save_dismissed(dismissed, corpus_id)
     return {"ok": True}
 
 
@@ -943,22 +1031,27 @@ def clear_staging(session: str = Depends(require_writable)):
 @router.get("/commonplace/progress")
 def get_progress(session: str = Depends(require_corpus_access)):
     corpus_id = _session_corpus_id(session)
-    seen = _load_seen(corpus_id)
     total = _count_eligible(corpus_id)
+    available = len(_eligible_notes(corpus_id))
     return {
-        "seen": len(seen),
+        "seen": 0,
         "total": total,
-        "complete": len(seen) >= total,
+        "available": available,
+        "complete": available == 0,
     }
 
 
 @router.post("/commonplace/reshuffle")
 def reshuffle(session: str = Depends(require_writable)):
-    """Clear all seen state — every note becomes eligible again."""
+    """Legacy no-op: sampling no longer keeps queue bookkeeping."""
     corpus_id = _session_corpus_id(session)
-    _save_seen(set(), corpus_id)
     total = _count_eligible(corpus_id)
-    return {"seen": 0, "total": total, "complete": False}
+    return {
+        "seen": 0,
+        "total": total,
+        "available": len(_eligible_notes(corpus_id)),
+        "complete": False,
+    }
 
 
 # ---- WebSocket session ----
@@ -1030,7 +1123,7 @@ async def commonplace_session(ws: WebSocket):
             if prep["sampled_count"] == 0:
                 await send({
                     "type": "error",
-                    "message": "all notes have been processed — commonplace book is complete",
+                    "message": "no eligible notes available for commonplace sampling",
                 })
                 await ws.close()
                 return
@@ -1083,7 +1176,6 @@ async def commonplace_session(ws: WebSocket):
                 "run_id": run_dir.name,
                 "input_chars": prep["in_chars"],
                 "sampled_count": prep["sampled_count"],
-                "seen_before": prep["seen_before"],
                 "total_eligible": prep["total_eligible"],
                 "guidance": user_guidance,
                 "notes": prep["notes"],

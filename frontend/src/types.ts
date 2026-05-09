@@ -65,7 +65,6 @@ export type SpawnedInfo = {
   top_n?: number;
   // commonplace-only
   sampled_count?: number;
-  seen_before?: number;
   total_eligible?: number;
 };
 

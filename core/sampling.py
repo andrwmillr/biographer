@@ -230,7 +230,7 @@ def build_input(top_n, corpus_id=None, char_cap=None, label_filter=None,
                 lines.append("")
             ordered_notes.extend(sampled)
     text = "\n".join(lines)
-    # Collect rels of all sampled notes (for "seen" tracking).
+    # Collect rels of all sampled notes for run artifacts/debugging.
     sampled_rels = [
         n["rel"]
         for ns in sampled_by_era.values()

@@ -456,7 +456,7 @@ export function ChatWorkspace({
             : scope.kind === "preface"
               ? `reading all chapters + themes + cited source notes`
               : scope.kind === "commonplace"
-                ? `reading ${info.sampled_count ?? 0} unseen notes (${info.seen_before ?? 0} already processed)`
+                ? `reading ${info.sampled_count ?? 0} sampled notes`
                 : `reading top-${info.top_n ?? THEMES_TOP_N} per era`;
         setLog((l) => [...l, { kind: "status", text: summary }]);
       } else if (t === "narration") {
@@ -619,17 +619,12 @@ export function ChatWorkspace({
     setHighlightDate(dateKey);
     setHighlightContext(context ?? "");
     if (collapsed.notes) {
-      panelRefs.current.notes?.expand();
+      setPaneCollapsed("notes", false);
     }
   }
 
-  function togglePaneCollapse(id: PaneId) {
-    // Compute target collapsed state synchronously, then build a layout
-    // that splits 100% across all panes ourselves. Library defaults can
-    // squeeze a non-toggled pane down to collapsedSize without firing
-    // onCollapse, leaving the UI showing expanded content in a 3% sliver.
+  function applyPaneLayout(next: Record<PaneId, boolean>) {
     const COLLAPSED = 3;
-    const next: Record<PaneId, boolean> = { ...collapsed, [id]: !collapsed[id] };
     const expanded = PANE_ORDER.filter((p) => !next[p]);
     const share = expanded.length
       ? (100 - COLLAPSED * (PANE_ORDER.length - expanded.length)) /
@@ -637,6 +632,19 @@ export function ChatWorkspace({
       : 0;
     const sizes = PANE_ORDER.map((p) => (next[p] ? COLLAPSED : share));
     panelGroupRef.current?.setLayout(sizes);
+  }
+
+  function setPaneCollapsed(id: PaneId, isCollapsed: boolean) {
+    // Compute target collapsed state synchronously, then build a layout
+    // that splits 100% across all panes ourselves. Library defaults can
+    // squeeze a non-toggled pane down to collapsedSize without firing
+    // onCollapse, leaving the UI showing expanded content in a 3% sliver.
+    const next: Record<PaneId, boolean> = { ...collapsed, [id]: isCollapsed };
+    applyPaneLayout(next);
+  }
+
+  function togglePaneCollapse(id: PaneId) {
+    setPaneCollapsed(id, !collapsed[id]);
   }
 
   // ---- Render helpers ----
@@ -693,7 +701,7 @@ export function ChatWorkspace({
               : "This corpus can be read here, but agent runs are disabled."
             : scope.kind === "commonplace"
               ? canCompute
-                ? "Press ▶ to find the good stuff. The agent reads unseen notes and extracts standout passages."
+                ? "Press ▶ to find the good stuff. The agent samples notes and extracts standout passages."
                 : "This corpus can be read here, but agent runs are disabled."
               : canCompute
                 ? "Press ▶ to surface top recurring threads. The agent reads notes then proposes ideas for you to respond to."
