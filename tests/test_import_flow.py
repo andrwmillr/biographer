@@ -241,6 +241,59 @@ def test_eras_requires_session(client: TestClient, auth_token: str):
     assert r.status_code == 401
 
 
+def test_get_chapter_returns_written_timestamp(client: TestClient, auth_token: str):
+    zip_bytes = _build_zip({"2020-01-15.md": "chapter source note"})
+    headers_auth = {"X-Auth-Token": auth_token}
+
+    r = client.post(
+        "/import/notes",
+        files={"file": ("notes.zip", zip_bytes, "application/zip")},
+        headers=headers_auth,
+    )
+    assert r.status_code == 200, r.text
+    slug = r.json()["slug"]
+    headers = {"X-Corpus-Session": slug, **headers_auth}
+
+    r = client.post(
+        "/import/eras",
+        files={
+            "file": (
+                "eras.yaml",
+                b"- name: Pre-NYC\n  start: 2020-01\n",
+                "text/yaml",
+            )
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    chapter_text = "A locked chapter."
+    era_slug = wb.era_slug("Pre-NYC")
+    run_dir = (
+        wb.biographies_dir(slug)
+        / "_dump"
+        / era_slug
+        / "runs"
+        / "2026-05-10T073000"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "output.md").write_text(chapter_text, encoding="utf-8")
+    chapter_path = wb.chapters_dir(slug) / f"{era_slug}.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(chapter_text, encoding="utf-8")
+
+    r = client.get("/chapters/Pre-NYC", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "content": chapter_text,
+        "written_at": "2026-05-10T07:30:00",
+    }
+
+    r = client.get("/eras", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["written_at"] == "2026-05-10T07:30:00"
+
+
 def test_import_notes_requires_auth(client: TestClient):
     """`/import/notes` must reject anonymous uploads — anyone could otherwise
     spam the corpora directory."""

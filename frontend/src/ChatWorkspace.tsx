@@ -38,6 +38,7 @@ type ChatWorkspaceProps = {
   // by the chapters tab to label the pane with the active chapter's
   // name. Themes leaves it null.
   draftHeaderSlot?: ReactNode;
+  draftWrittenAt?: string | null;
 };
 
 type WSStatus =
@@ -49,6 +50,10 @@ type WSStatus =
   | "error";
 
 type PaneId = "chat" | "draft" | "notes";
+type LockedDraft = {
+  content: string;
+  written_at?: string | null;
+};
 const PANE_ORDER: PaneId[] = ["chat", "draft", "notes"];
 const PANE_TITLES: Record<PaneId, string> = {
   chat: "Chat",
@@ -69,6 +74,17 @@ const PANE_DEFAULT_SIZE: Record<PaneId, number> = {
 const THEMES_TOP_N = 7;
 const ERA_INCLUDE_FUTURE = true;
 
+function formatWrittenDate(value: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!m) return value;
+  const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
 export function ChatWorkspace({
   apiBase,
   wsBase,
@@ -79,6 +95,7 @@ export function ChatWorkspace({
   canCompute = true,
   onFinalized,
   draftHeaderSlot,
+  draftWrittenAt,
 }: ChatWorkspaceProps) {
   // Resolve model: if the current selection isn't in this scope's allowed
   // list (e.g. opus-4.7 on themes), fall back to the first available.
@@ -99,6 +116,7 @@ export function ChatWorkspace({
   const [cost, setCost] = useState<number>(0);
   const [error, setError] = useState<string>("");
   const [canonicalDraft, setCanonicalDraft] = useState<string>("");
+  const [canonicalWrittenAt, setCanonicalWrittenAt] = useState<string>("");
   const draftViewKey = `draftView:${scope.kind}`;
   const [draftView, _setDraftView] = useState<"canonical" | "working">(() => {
     const stored = sessionStorage.getItem(draftViewKey);
@@ -248,11 +266,12 @@ export function ChatWorkspace({
     fetch(url, { headers: authHeaders() })
       .then(async (r) => {
         if (!r.ok) return null;
-        return r.json() as Promise<{ content: string }>;
+        return r.json() as Promise<LockedDraft>;
       })
       .then((data) => {
         if (cancelled || !data?.content) return;
         setCanonicalDraft(data.content);
+        setCanonicalWrittenAt(data.written_at ?? "");
         // Only seed draft on mount — don't clobber a working draft from
         // a live session if this effect re-fires (e.g. scope ref change).
         setDraft((prev) => prev || data.content);
@@ -518,9 +537,11 @@ export function ChatWorkspace({
           location: payload.location,
           words: payload.words,
           overwritten: payload.overwritten,
+          written_at: payload.written_at,
         };
         setDraft(info.content);
         setCanonicalDraft(info.content);
+        setCanonicalWrittenAt(info.written_at ?? "");
         setDraftView("working");
         setPhase("finalized");
         // Locked — no point resuming this run after disconnect.
@@ -673,6 +694,15 @@ export function ChatWorkspace({
 
   const displayedDraft =
     draftView === "canonical" ? canonicalDraft : draft;
+  const canonicalHeaderWrittenAt =
+    draftWrittenAt !== undefined ? (draftWrittenAt ?? "") : canonicalWrittenAt;
+  const displayedWrittenAt =
+    displayedDraft && (draftView === "canonical" || draft === canonicalDraft)
+      ? canonicalHeaderWrittenAt
+      : "";
+  const writtenLabel = displayedWrittenAt
+    ? formatWrittenDate(displayedWrittenAt)
+    : "";
   const showDraftToggle =
     !!canonicalDraft &&
     !!draft &&
@@ -940,8 +970,13 @@ export function ChatWorkspace({
       >
         {draftHeaderSlot && (
           <div className="sticky top-0 z-10 bg-white">
-            <div className="px-6 pt-2 pb-3 text-center font-serif text-lg text-stone-800">
-              {draftHeaderSlot}
+            <div className="px-6 py-2 text-center font-serif text-lg text-stone-800">
+              <div>{draftHeaderSlot}</div>
+              {writtenLabel && (
+                <div className="mt-0.5 font-sans text-[11px] font-normal text-stone-400">
+                  {writtenLabel}
+                </div>
+              )}
             </div>
             <div className="mx-[11px] h-px bg-[linear-gradient(to_right,transparent_0%,#d6d3d1_6%,#d6d3d1_94%,transparent_100%)]" />
           </div>

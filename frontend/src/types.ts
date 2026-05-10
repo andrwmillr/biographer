@@ -16,6 +16,7 @@ export type Era = {
   end: string | null;
   note_count: number;
   has_chapter: boolean;
+  written_at?: string | null;
 };
 
 export type LogItem =
@@ -73,4 +74,5 @@ export type FinalizedInfo = {
   location: string;
   words: number;
   overwritten: boolean;
+  written_at?: string | null;
 };

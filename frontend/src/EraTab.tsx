@@ -103,6 +103,7 @@ export function EraTab({
       canCompute={canCompute}
       onFinalized={onChapterFinalized}
       draftHeaderSlot={eraLabel}
+      draftWrittenAt={era.written_at}
     />
   );
 }

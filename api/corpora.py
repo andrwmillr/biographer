@@ -321,6 +321,11 @@ def list_eras(session: str = Depends(require_corpus_access)):
             "end": display_end,
             "note_count": len(notes_in_era),
             "has_chapter": chapter_path.exists(),
+            "written_at": (
+                wb.canonical_written_at(corpus_id, chapter_path, wb.era_slug(name))
+                if chapter_path.exists()
+                else None
+            ),
         })
     return out
 
@@ -334,7 +339,11 @@ def get_chapter(era: str, session: str = Depends(require_corpus_access)):
     chapter_path = wb.chapters_dir(corpus_id) / f"{wb.era_slug(era)}.md"
     if not chapter_path.exists():
         raise HTTPException(404, f"no chapter for era: {era}")
-    return {"content": chapter_path.read_text(encoding="utf-8")}
+    slug = wb.era_slug(era)
+    return {
+        "content": chapter_path.read_text(encoding="utf-8"),
+        "written_at": wb.canonical_written_at(corpus_id, chapter_path, slug),
+    }
 
 
 @router.get("/notes")

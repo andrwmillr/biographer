@@ -215,6 +215,7 @@ def _promote_era_chapter(run_dir: Path, era_name: str, corpus_id: str) -> dict:
         "location": str(dst.relative_to(REPO)),
         "words": len(content.split()),
         "overwritten": overwritten,
+        "written_at": wb.run_timestamp_to_iso(run_dir.name),
     }
 
 
@@ -601,6 +602,7 @@ async def session(ws: WebSocket):
                     "location": promoted["location"],
                     "words": promoted["words"],
                     "overwritten": promoted["overwritten"],
+                    "written_at": promoted["written_at"],
                 })
                 tlog("session_end", kind="era", email=user_email,
                      corpus=corpus_id, era=era, reason="finalized",
@@ -681,6 +683,7 @@ def _promote_preface(run_dir: Path, corpus_id: str) -> dict:
         "location": str(dst.relative_to(REPO)),
         "words": len(content.split()),
         "overwritten": overwritten,
+        "written_at": wb.run_timestamp_to_iso(run_dir.name),
     }
 
 
@@ -691,7 +694,10 @@ def get_latest_preface(session: str = Depends(require_corpus_access)):
     preface_path = wb.chapters_dir(corpus_id) / "00_Preface.md"
     if not preface_path.exists():
         raise HTTPException(404, "no preface yet")
-    return {"content": preface_path.read_text(encoding="utf-8")}
+    return {
+        "content": preface_path.read_text(encoding="utf-8"),
+        "written_at": wb.canonical_written_at(corpus_id, preface_path, "preface"),
+    }
 
 
 @router.websocket("/preface-session")
@@ -860,6 +866,7 @@ async def preface_session(ws: WebSocket):
                     "location": promoted["location"],
                     "words": promoted["words"],
                     "overwritten": promoted["overwritten"],
+                    "written_at": promoted["written_at"],
                 })
                 tlog("session_end", kind="preface", email=user_email,
                      corpus=corpus_id, reason="finalized",

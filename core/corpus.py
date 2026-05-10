@@ -10,11 +10,13 @@ Tests monkey-patch `corpus._CORPORA_BASE` to redirect into a temp
 fixture; do that on the corpus module, not via re-exports."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pickle
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -85,6 +87,42 @@ def chapters_dir(corpus_id=None):
 
 def threads_dir(corpus_id=None):
     return _corpus_paths(corpus_id)["threads"]
+
+
+def run_timestamp_to_iso(timestamp: str) -> str | None:
+    """Convert a run directory name to an ISO-ish local timestamp."""
+    try:
+        parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H%M%S")
+        return parsed.isoformat(timespec="seconds")
+    except ValueError:
+        return None
+
+
+def canonical_written_at(corpus_id: str, canonical_path: Path,
+                         dump_slug: str) -> str | None:
+    """Best-effort written timestamp for a promoted chapter/preface."""
+    if not canonical_path.exists():
+        return None
+    try:
+        content = canonical_path.read_bytes()
+    except OSError:
+        return None
+    digest = hashlib.sha256(content).hexdigest()
+    runs_dir = biographies_dir(corpus_id) / "_dump" / dump_slug / "runs"
+    if runs_dir.exists():
+        for output in sorted(runs_dir.glob("*/output.md"), reverse=True):
+            try:
+                if hashlib.sha256(output.read_bytes()).hexdigest() != digest:
+                    continue
+            except OSError:
+                continue
+            ts = run_timestamp_to_iso(output.parent.name)
+            if ts:
+                return ts
+    try:
+        return datetime.fromtimestamp(canonical_path.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        return None
 
 
 def load_canonical_themes(corpus_id=None):
